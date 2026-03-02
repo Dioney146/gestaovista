@@ -98,9 +98,8 @@ st.markdown("""
 # ==================================================
 # LOCALIZAÇÃO DOS ARQUIVOS
 # ==================================================
-arquivo_xls = r"I:\dioney\GestaoVista\base8189.xls"
-arquivo_xlsx = r"I:\dioney\GestaoVista\base8189.xlsx"
-
+arquivo_xls = "base8189.xls"
+arquivo_xlsx = "base8189.xlsx"
 caminho = None
 engine = None
 
