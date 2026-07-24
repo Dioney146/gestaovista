@@ -995,13 +995,14 @@ def renderizar_mapa_interativo(chave, mostrar_titulo=True):
 
     fig_mapa = px.choropleth(
         df_mapa, geojson=geo, locations="UF", featureidkey="properties.sigla",
-        color="Valor", color_continuous_scale=["#161a22", "#7c3d00", "#F59E0B", "#FDBA74"],
+        color="Valor", color_continuous_scale=["#3a2410", "#8a4a00", "#F59E0B", "#FDBA74"],
         custom_data=["Pedidos", "TemDados"],
         scope="south america",
+        title="",
     )
     fig_mapa.update_traces(
-        marker_line_color="rgba(255,255,255,0.15)", marker_line_width=1,
-        marker_opacity=0.45 if tem_selecao else 1.0,
+        marker_line_color="rgba(255,255,255,0.25)", marker_line_width=1,
+        marker_opacity=0.55 if tem_selecao else 1.0,
         hovertemplate="<b>%{location}</b><br>Valor: R$ %{z:,.2f}<br>Pedidos: %{customdata[0]}<extra></extra>",
     )
 
@@ -1018,7 +1019,12 @@ def renderizar_mapa_interativo(chave, mostrar_titulo=True):
         fig_mapa.add_trace(fig_destaque)
 
     fig_mapa.update_geos(fitbounds="locations", visible=False, bgcolor="rgba(0,0,0,0)")
-    fig_mapa.update_layout(coloraxis_showscale=True, coloraxis_colorbar=dict(title="Valor (R$)", tickfont=dict(color="#B8C0CC")), height=480)
+    fig_mapa.update_layout(
+        title_text="",
+        coloraxis_showscale=True,
+        coloraxis_colorbar=dict(title="Valor (R$)", tickfont=dict(color="#B8C0CC")),
+        height=480,
+    )
     aplicar_tema_grafico(fig_mapa)
 
     try:
@@ -1081,12 +1087,10 @@ def renderizar_rodape():
 renderizar_kpis()
 
 if pagina_ativa == "Dashboard":
-    tabs = st.tabs(["Por Estados", "Por Municipio", "Por Praca", "Detalhes dos Pedidos", "Mapa"])
+    tabs = st.tabs(["Por Estados", "Por Municipio", "Detalhes dos Pedidos"])
     with tabs[0]: renderizar_por_estados()
     with tabs[1]: renderizar_por_municipio()
-    with tabs[2]: renderizar_por_praca()
-    with tabs[3]: renderizar_detalhes()
-    with tabs[4]: renderizar_mapa()
+    with tabs[2]: renderizar_detalhes()
 
 elif pagina_ativa == "Pedidos":
     renderizar_detalhes()
