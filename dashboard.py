@@ -1,10 +1,17 @@
 # -*- coding: utf-8 -*-
 import pandas as pd
 import streamlit as st
-import os
 import io
+import time
+from urllib.parse import quote
 import plotly.express as px
 import plotly.graph_objects as go
+
+try:
+    from streamlit_autorefresh import st_autorefresh
+    AUTOREFRESH_DISPONIVEL = True
+except ImportError:
+    AUTOREFRESH_DISPONIVEL = False
 
 st.set_page_config(
     layout="wide",
@@ -72,125 +79,115 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==================================================
-# LOCALIZACAO DOS ARQUIVOS
+# AUTO-REFRESH (atualiza a tela sozinha periodicamente)
 # ==================================================
-# Pasta onde este script esta localizado (funciona tanto local quanto no Streamlit Cloud)
-PASTA_APP = os.path.dirname(os.path.abspath(__file__))
+INTERVALO_ATUALIZACAO_SEGUNDOS = 60
 
-# Caminhos possiveis: primeiro tenta a pasta local do app (repositorio),
-# depois tenta o caminho de rede usado localmente (J:\...)
-CAMINHOS_CANDIDATOS = [
-    (os.path.join(PASTA_APP, "base8189.xls"),  "xlrd"),
-    (os.path.join(PASTA_APP, "base8189.xlsx"), "openpyxl"),
-    (r"J:\dioney\GestaoVista\base8189.xls",  "xlrd"),
-    (r"J:\dioney\GestaoVista\base8189.xlsx", "openpyxl"),
-]
-
-caminho = None
-engine  = None
-
-for cam, eng in CAMINHOS_CANDIDATOS:
-    if os.path.exists(cam):
-        caminho = cam
-        engine  = eng
-        break
-
-if caminho is None:
-    st.error("Nenhum arquivo Excel valido encontrado (base8189.xls/.xlsx).")
-    st.stop()
+if AUTOREFRESH_DISPONIVEL:
+    st_autorefresh(interval=INTERVALO_ATUALIZACAO_SEGUNDOS * 1000, key="auto_refresh_dados")
 
 # ==================================================
-# CARREGAMENTO DE DADOS
-# Colunas reais: NUMPED, CODCLI, NOMECLIENTE, POSICAO, DATA, HORA, MINUTO,
-#                DTENTREGA, NOMERCA, NOMESUP, PESOBRUTOTOT, CIDADE, VLTOTAL,
-#                TIPOVENDA, PRACA, NUMCARREGAMENTO, DESTINO, PLACA, LONGITUDE, LATITUDE
+# CONFIGURACAO GOOGLE SHEETS
 # ==================================================
-@st.cache_data(ttl=10, show_spinner=False)
-def carregar_excel(caminho, engine):
+SHEET_ID = "1Ad8UDGM_2z_co312CC3S-XYo_EIKfNljVwB-ZY8kphY"
+
+# Mapeia a sigla do estado exibida no app -> nome exato da aba na planilha Google
+ESTADOS = {
+    "AM":    "LIBERADOS_AM",
+    "BA":    "LIBERADOS_BA",
+    "DF":    "LIBERADOS_D.F",
+    "MG.ES": "LIBERADOS_MG.ES",
+    "SP":    "LIBERADOS_SP",
+    "SPW":   "LIBERADOS_SP (WFS)",
+}
+
+def montar_url_aba(nome_aba):
+    """Monta a URL de exportacao CSV de uma aba especifica do Google Sheets."""
+    return f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={quote(nome_aba)}"
+
+def parse_numero_brl(valor):
+    """Converte valores numericos vindos da planilha (formato BR ou US) para float."""
+    if pd.isna(valor):
+        return 0.0
+    s = str(valor).strip()
+    if s == "":
+        return 0.0
+    s = s.replace(" ", "").replace("R$", "")
+    if "," in s and "." in s:
+        # Formato 1.234,56 -> remove separador de milhar, troca virgula por ponto
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
     try:
-        df = pd.read_excel(caminho, engine=engine)
-        df = df.fillna(0)
+        return float(s)
+    except (ValueError, TypeError):
+        return 0.0
 
-        # Colunas numericas
-        for col in ["VLTOTAL", "PESOBRUTOTOT"]:
-            if col in df.columns:
-                df[col] = df[col].astype(str).str.replace(",", ".", regex=False)
-                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+def tratar_dataframe(df):
+    """Aplica a limpeza padrao (numeros, datas, textos) em um dataframe de uma aba."""
+    df = df.copy()
+    df = df.fillna(0)
 
-        # Colunas de data — formatar para exibicao
-        for col in ["DATA", "DTENTREGA"]:
-            if col in df.columns:
-                try:
-                    df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%d/%m/%Y")
-                    df[col] = df[col].fillna("")
-                except Exception:
-                    pass
+    for col in ["VLTOTAL", "PESOBRUTOTOT"]:
+        if col in df.columns:
+            df[col] = df[col].apply(parse_numero_brl)
 
-        # Garantir que colunas de texto nao fiquem como 0 (resultado do fillna)
-        cols_texto = ["NOMECLIENTE", "POSICAO", "NOMERCA", "NOMESUP", "CIDADE",
-                      "TIPOVENDA", "PRACA", "DESTINO", "PLACA"]
-        for col in cols_texto:
-            if col in df.columns:
-                df[col] = df[col].replace(0, "").astype(str)
-
-        return df
-    except Exception as e:
-        st.error(f"Erro ao carregar planilha: {e}")
-        return None
-
-df = carregar_excel(caminho, engine)
-if df is None:
-    st.cache_data.clear()
-    import time; time.sleep(1)
-    df = carregar_excel(caminho, engine)
-if df is None:
-    st.warning("Planilha sendo atualizada, aguarde alguns segundos e recarregue a pagina...")
-    st.stop()
-
-# ==================================================
-# CARREGAMENTO BASE PEDIDOS PARADOS (8373)
-# ==================================================
-@st.cache_data(ttl=10, show_spinner=False)
-def carregar_parados():
-    caminhos = [
-        (os.path.join(PASTA_APP, "base8373.xls"),  "xlrd"),
-        (os.path.join(PASTA_APP, "base8373.xlsx"), "openpyxl"),
-        (r"J:\dioney\GestaoVista\base8373.xls",  "xlrd"),
-        (r"J:\dioney\GestaoVista\base8373.xlsx", "openpyxl"),
-    ]
-    for path, eng in caminhos:
-        if os.path.exists(path):
+    for col in ["DATA", "DTENTREGA"]:
+        if col in df.columns:
             try:
-                df2 = pd.read_excel(path, engine=eng)
-                df2 = df2.fillna("")
-
-                if "VLTOTAL" in df2.columns:
-                    df2["VLTOTAL"] = df2["VLTOTAL"].astype(str).str.replace(",", ".", regex=False)
-                    df2["VLTOTAL"] = pd.to_numeric(df2["VLTOTAL"], errors="coerce").fillna(0)
-
-                if "DATA" in df2.columns:
-                    try:
-                        data_col = pd.to_datetime(df2["DATA"], errors="coerce")
-                        hoje = pd.Timestamp.today().normalize()
-                        df2["DIAS PARADOS"] = (hoje - data_col).dt.days.fillna(0).astype(int)
-                    except Exception:
-                        df2["DIAS PARADOS"] = 0
-
-                for col in df2.columns:
-                    if col == "DIAS PARADOS":
-                        continue
-                    if "DATA" in col.upper() or "DT" in col.upper():
-                        try:
-                            df2[col] = pd.to_datetime(df2[col], errors="coerce").dt.strftime("%d/%m/%Y")
-                            df2[col] = df2[col].fillna("")
-                        except Exception:
-                            pass
-                return df2
+                df[col] = pd.to_datetime(df[col], errors="coerce", dayfirst=True).dt.strftime("%d/%m/%Y")
+                df[col] = df[col].fillna("")
             except Exception:
                 pass
-    return None
 
-df_parados = carregar_parados()
+    cols_texto = ["NOMECLIENTE", "POSICAO", "NOMERCA", "NOMESUP", "CIDADE",
+                  "TIPOVENDA", "PRACA", "DESTINO", "PLACA"]
+    for col in cols_texto:
+        if col in df.columns:
+            df[col] = df[col].replace(0, "").astype(str)
+
+    return df
+
+@st.cache_data(ttl=INTERVALO_ATUALIZACAO_SEGUNDOS, show_spinner=False)
+def carregar_todos_estados():
+    """Baixa e junta os dados de todas as abas/estados da planilha Google."""
+    frames = []
+    erros = []
+
+    for sigla, nome_aba in ESTADOS.items():
+        try:
+            url = montar_url_aba(nome_aba)
+            df_estado = pd.read_csv(url)
+            if df_estado is None or df_estado.empty:
+                continue
+            df_estado = tratar_dataframe(df_estado)
+            df_estado["ESTADO"] = sigla
+            frames.append(df_estado)
+        except Exception as e:
+            erros.append(f"{sigla} ({nome_aba}): {e}")
+
+    if frames:
+        df_total = pd.concat(frames, ignore_index=True)
+    else:
+        df_total = pd.DataFrame()
+
+    return df_total, erros
+
+df, erros_carregamento = carregar_todos_estados()
+
+if df.empty:
+    st.error("Nao foi possivel carregar dados de nenhum estado a partir do Google Sheets. "
+              "Verifique se a planilha esta compartilhada como 'Qualquer pessoa com o link - Leitor'.")
+    if erros_carregamento:
+        with st.expander("Detalhes dos erros"):
+            for e in erros_carregamento:
+                st.write(e)
+    st.stop()
+
+if erros_carregamento:
+    with st.expander(f"⚠️ {len(erros_carregamento)} estado(s) nao carregaram corretamente"):
+        for e in erros_carregamento:
+            st.write(e)
 
 # ==================================================
 # FUNCOES AUXILIARES
@@ -255,12 +252,38 @@ def resumo_por_cidade(df):
     resumo.rename(columns={"CIDADE": "Cidade"}, inplace=True)
     return resumo
 
+def resumo_por_estado(df):
+    resumo = df.groupby("ESTADO").agg(
+        Pedidos=("NUMPED",       "count"),
+        Valor  =("VLTOTAL",      "sum"),
+        Peso   =("PESOBRUTOTOT", "sum")
+    ).reset_index().sort_values("Valor", ascending=False)
+    resumo["Valor_FMT"] = resumo["Valor"].apply(fmt_brl)
+    resumo["Peso_FMT"]  = resumo["Peso"].apply(fmt_kg)
+    resumo.rename(columns={"ESTADO": "Estado"}, inplace=True)
+    return resumo
+
+# ==================================================
+# BARRA DE STATUS / ATUALIZACAO
+# ==================================================
+col_status, col_botao = st.columns([5, 1])
+with col_status:
+    st.caption(f"Dados de {len(ESTADOS)} estados • Atualiza automaticamente a cada {INTERVALO_ATUALIZACAO_SEGUNDOS}s • Ultima leitura: {time.strftime('%d/%m/%Y %H:%M:%S')}")
+with col_botao:
+    if st.button("🔄 Atualizar agora"):
+        st.cache_data.clear()
+        st.rerun()
+
 # ==================================================
 # FILTROS GLOBAIS
 # ==================================================
 st.markdown('<p class="filter-title">Filtros</p>', unsafe_allow_html=True)
 
-col_f1, col_f2, col_f3, col_f4 = st.columns([2, 2, 1, 1])
+col_f0, col_f1, col_f2, col_f3, col_f4 = st.columns([1.3, 2, 2, 1, 1])
+
+with col_f0:
+    estados_disp = list(ESTADOS.keys())
+    estados_sel  = st.multiselect("Filtrar por Estado", options=estados_disp, placeholder="Todos os estados")
 
 with col_f1:
     cidades_disp = sorted(df["CIDADE"].astype(str).unique().tolist()) if "CIDADE" in df.columns else []
@@ -289,6 +312,9 @@ with col_f4:
 # ==================================================
 df_filtrado = df.copy()
 
+if estados_sel:
+    df_filtrado = df_filtrado[df_filtrado["ESTADO"].isin(estados_sel)]
+
 if cidades_sel:
     df_filtrado = df_filtrado[df_filtrado["CIDADE"].isin(cidades_sel)]
 
@@ -306,9 +332,8 @@ st.markdown("---")
 # ==================================================
 # ABAS
 # ==================================================
-tab1, tab2, tab3, tab4 = st.tabs([
-    "Por Municipio", "Por Supervisor", "Por Praca",
-    "Detalhes dos Pedidos"
+tab_estados, tab1, tab2, tab3, tab4 = st.tabs([
+    "Por Estados", "Por Municipio", "Por Supervisor", "Por Praca", "Detalhes dos Pedidos"
 ])
 
 def mostrar_kpis_globais():
@@ -341,6 +366,65 @@ def mostrar_kpis_globais():
             <div class="kpi-value">{fmt_kg(total_peso)}</div>
         </div>""", unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
+
+# ---------- ABA POR ESTADOS ----------
+with tab_estados:
+    mostrar_kpis_globais()
+    st.subheader("Resumo por Estado")
+
+    if "ESTADO" not in df_filtrado.columns or df_filtrado.empty:
+        st.info("Nenhum dado disponivel.")
+    else:
+        estado_df = resumo_por_estado(df_filtrado)
+
+        col_tabela, col_grafico = st.columns([1.2, 1])
+
+        with col_tabela:
+            tabela_est = estado_df[["Estado", "Pedidos", "Valor_FMT", "Peso_FMT"]].rename(columns={
+                "Valor_FMT": "Valor",
+                "Peso_FMT" : "Peso",
+            })
+            st.markdown(tabela_html(tabela_est, max_height=None), unsafe_allow_html=True)
+
+        with col_grafico:
+            fig_estado = px.bar(
+                estado_df.sort_values("Valor"),
+                x="Valor", y="Estado", orientation="h",
+                title="Valor por Estado", color="Valor",
+                color_continuous_scale=["#b35c00", "#ffb400", "#ffe066"],
+                custom_data=["Valor_FMT", "Pedidos"],
+            )
+            fig_estado.update_traces(
+                marker_line_width=0,
+                hovertemplate="<b>%{y}</b><br>Valor: %{customdata[0]}<br>Pedidos: %{customdata[1]}<extra></extra>"
+            )
+            fig_estado.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                font_color="white", title_font_size=15, coloraxis_showscale=False,
+                margin=dict(l=0, r=10, t=40, b=10),
+                yaxis=dict(autorange="reversed", title=""),
+                xaxis=dict(title="", tickprefix="R$ ", separatethousands=True),
+            )
+            st.plotly_chart(fig_estado, use_container_width=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        fig_pizza_estado = px.pie(
+            estado_df, names="Estado", values="Valor",
+            title="Participacao por Valor (R$) - Todos os Estados",
+            color_discrete_sequence=px.colors.sequential.Oranges_r,
+            custom_data=["Valor_FMT", "Pedidos"],
+        )
+        fig_pizza_estado.update_traces(
+            textposition="inside", textinfo="percent+label",
+            hovertemplate="<b>%{label}</b><br>Valor: %{customdata[0]}<br>Pedidos: %{customdata[1]}<extra></extra>"
+        )
+        fig_pizza_estado.update_layout(
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            font_color="white", title_font_size=14,
+            legend=dict(font=dict(color="white")),
+            margin=dict(l=0, r=0, t=40, b=10),
+        )
+        st.plotly_chart(fig_pizza_estado, use_container_width=True)
 
 # ---------- ABA 1: POR MUNICIPIO ----------
 with tab1:
@@ -530,7 +614,7 @@ with tab4:
 
     # Colunas visiveis na tabela (ordem logica)
     COLUNAS_EXIB = [c for c in [
-        "NUMPED", "DATA", "NOMECLIENTE", "CIDADE", "PRACA",
+        "NUMPED", "ESTADO", "DATA", "NOMECLIENTE", "CIDADE", "PRACA",
         "NOMESUP", "NOMERCA", "POSICAO", "TIPOVENDA",
         "VLTOTAL", "PESOBRUTOTOT", "DTENTREGA",
         "NUMCARREGAMENTO", "PLACA", "DESTINO"
