@@ -74,20 +74,29 @@ st.markdown("""
 # ==================================================
 # LOCALIZACAO DOS ARQUIVOS
 # ==================================================
-arquivo_xls  = r"J:\dioney\GestaoVista\base8189.xls"
-arquivo_xlsx = r"J:\dioney\GestaoVista\base8189.xlsx"
+# Pasta onde este script esta localizado (funciona tanto local quanto no Streamlit Cloud)
+PASTA_APP = os.path.dirname(os.path.abspath(__file__))
+
+# Caminhos possiveis: primeiro tenta a pasta local do app (repositorio),
+# depois tenta o caminho de rede usado localmente (J:\...)
+CAMINHOS_CANDIDATOS = [
+    (os.path.join(PASTA_APP, "base8189.xls"),  "xlrd"),
+    (os.path.join(PASTA_APP, "base8189.xlsx"), "openpyxl"),
+    (r"J:\dioney\GestaoVista\base8189.xls",  "xlrd"),
+    (r"J:\dioney\GestaoVista\base8189.xlsx", "openpyxl"),
+]
 
 caminho = None
 engine  = None
 
-if os.path.exists(arquivo_xls):
-    caminho = arquivo_xls
-    engine  = "xlrd"
-elif os.path.exists(arquivo_xlsx):
-    caminho = arquivo_xlsx
-    engine  = "openpyxl"
-else:
-    st.error("Nenhum arquivo Excel valido encontrado em J:\\dioney\\GestaoVista\\")
+for cam, eng in CAMINHOS_CANDIDATOS:
+    if os.path.exists(cam):
+        caminho = cam
+        engine  = eng
+        break
+
+if caminho is None:
+    st.error("Nenhum arquivo Excel valido encontrado (base8189.xls/.xlsx).")
     st.stop()
 
 # ==================================================
@@ -144,6 +153,8 @@ if df is None:
 @st.cache_data(ttl=10, show_spinner=False)
 def carregar_parados():
     caminhos = [
+        (os.path.join(PASTA_APP, "base8373.xls"),  "xlrd"),
+        (os.path.join(PASTA_APP, "base8373.xlsx"), "openpyxl"),
         (r"J:\dioney\GestaoVista\base8373.xls",  "xlrd"),
         (r"J:\dioney\GestaoVista\base8373.xlsx", "openpyxl"),
     ]
@@ -587,7 +598,7 @@ with tab6:
     st.subheader("Pedidos Parados")
 
     if df_parados is None or df_parados.empty:
-        st.warning("Arquivo base8373 nao encontrado em J:\\dioney\\GestaoVista\\")
+        st.warning("Arquivo base8373.xls/.xlsx nao encontrado na pasta do app.")
     else:
         col_p1, col_p2 = st.columns([2, 1])
         with col_p1:
