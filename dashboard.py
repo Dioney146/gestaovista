@@ -427,18 +427,16 @@ def gerar_sparkline_svg(valores, cor="#F59E0B", largura=110, altura=32):
     path_area = path_linha + f" L {pontos[-1][0]:.1f},{altura} L 0,{altura} Z"
     uid = f"spk{abs(hash(str(valores)))}"
 
-    return f"""
-    <svg width="{largura}" height="{altura}" viewBox="0 0 {largura} {altura}">
-        <defs>
-            <linearGradient id="{uid}" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="{cor}" stop-opacity="0.45"/>
-                <stop offset="100%" stop-color="{cor}" stop-opacity="0"/>
-            </linearGradient>
-        </defs>
-        <path d="{path_area}" fill="url(#{uid})" stroke="none"/>
-        <path d="{path_linha}" fill="none" stroke="{cor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-    """
+    return (
+        f'<svg width="{largura}" height="{altura}" viewBox="0 0 {largura} {altura}">'
+        f'<defs><linearGradient id="{uid}" x1="0" y1="0" x2="0" y2="1">'
+        f'<stop offset="0%" stop-color="{cor}" stop-opacity="0.45"/>'
+        f'<stop offset="100%" stop-color="{cor}" stop-opacity="0"/>'
+        f'</linearGradient></defs>'
+        f'<path d="{path_area}" fill="url(#{uid})" stroke="none"/>'
+        f'<path d="{path_linha}" fill="none" stroke="{cor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+        f'</svg>'
+    )
 
 def serie_diaria(df, coluna, agregacao="sum"):
     """Agrega uma coluna por dia (usando DATA) para alimentar as sparklines reais."""
@@ -463,17 +461,15 @@ def serie_diaria(df, coluna, agregacao="sum"):
 def kpi_card_premium(icone, label, valor, descricao, valores_tendencia, cor=None):
     cor = cor or "#F59E0B"
     spark = gerar_sparkline_svg(valores_tendencia, cor=cor)
-    return f"""
-    <div class="kpi-card-premium">
-        <div class="kpi-top">
-            <div class="kpi-icon-circ">{icone}</div>
-        </div>
-        <div class="kpi-label-p">{label}</div>
-        <div class="kpi-valor-p">{valor}</div>
-        <div class="kpi-desc-p">{descricao}</div>
-        <div class="kpi-spark">{spark}</div>
-    </div>
-    """
+    return (
+        f'<div class="kpi-card-premium">'
+        f'<div class="kpi-top"><div class="kpi-icon-circ">{icone}</div></div>'
+        f'<div class="kpi-label-p">{label}</div>'
+        f'<div class="kpi-valor-p">{valor}</div>'
+        f'<div class="kpi-desc-p">{descricao}</div>'
+        f'<div class="kpi-spark">{spark}</div>'
+        f'</div>'
+    )
 
 # ==================================================
 # TABELA PREMIUM (com barra de peso/valor e linha de total)
@@ -824,12 +820,17 @@ def renderizar_kpis():
     n_dias = len([d for d in serie_pedidos if d is not None]) or 0
     desc_pedidos = f"{n_dias} dia(s) no periodo filtrado" if n_dias else "Sem historico diario"
 
-    html = '<div class="kpi-grid">'
-    html += kpi_card_premium("📦", "Total de Pedidos", fmt_int(total_pedidos), desc_pedidos, serie_pedidos)
-    html += kpi_card_premium("💰", "Valor Total", fmt_brl(total_valor), "Somatorio do periodo filtrado", serie_valor)
-    html += kpi_card_premium("⚖️", "Peso Total", fmt_kg(total_peso), "Somatorio do periodo filtrado", serie_peso)
-    html += '</div>'
-    st.markdown(html, unsafe_allow_html=True)
+    cards = [
+        ("📦", "Total de Pedidos", fmt_int(total_pedidos), desc_pedidos, serie_pedidos),
+        ("💰", "Valor Total", fmt_brl(total_valor), "Somatorio do periodo filtrado", serie_valor),
+        ("⚖️", "Peso Total", fmt_kg(total_peso), "Somatorio do periodo filtrado", serie_peso),
+    ]
+
+    colunas = st.columns(3)
+    for coluna, (icone, label, valor, descricao, serie) in zip(colunas, cards):
+        with coluna:
+            st.markdown(kpi_card_premium(icone, label, valor, descricao, serie), unsafe_allow_html=True)
+
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
 # ==================================================
@@ -1014,15 +1015,22 @@ def renderizar_rodape():
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
     n_estados = df_filtrado["ESTADO"].nunique() if "ESTADO" in df_filtrado.columns else 0
     n_cidades = df_filtrado["CIDADE"].nunique() if "CIDADE" in df_filtrado.columns else 0
-    html = f"""
-    <div class="rodape-grid">
-        <div class="rodape-card"><div class="rodape-ic">🟢</div><div><div class="rodape-t">Monitoramento em Tempo Real</div><div class="rodape-s">Dados atualizados a cada importacao</div></div></div>
-        <div class="rodape-card"><div class="rodape-ic">✅</div><div><div class="rodape-t">Dados Confiaveis</div><div class="rodape-s">Linhas de totais/resumo filtradas automaticamente</div></div></div>
-        <div class="rodape-card"><div class="rodape-ic">⚡</div><div><div class="rodape-t">Performance</div><div class="rodape-s">{fmt_int(len(df_filtrado))} pedidos processados</div></div></div>
-        <div class="rodape-card"><div class="rodape-ic">🧭</div><div><div class="rodape-t">Visao Completa</div><div class="rodape-s">{n_estados} estado(s) · {fmt_int(n_cidades)} cidade(s)</div></div></div>
-    </div>
-    """
-    st.markdown(html, unsafe_allow_html=True)
+
+    itens_rodape = [
+        ("🟢", "Monitoramento em Tempo Real", "Dados atualizados a cada importacao"),
+        ("✅", "Dados Confiaveis", "Linhas de totais/resumo filtradas automaticamente"),
+        ("⚡", "Performance", f"{fmt_int(len(df_filtrado))} pedidos processados"),
+        ("🧭", "Visao Completa", f"{n_estados} estado(s) · {fmt_int(n_cidades)} cidade(s)"),
+    ]
+
+    colunas = st.columns(4)
+    for coluna, (icone, titulo, subtitulo) in zip(colunas, itens_rodape):
+        with coluna:
+            st.markdown(
+                f'<div class="rodape-card"><div class="rodape-ic">{icone}</div>'
+                f'<div><div class="rodape-t">{titulo}</div><div class="rodape-s">{subtitulo}</div></div></div>',
+                unsafe_allow_html=True
+            )
 
 # ==================================================
 # ROTEAMENTO DE PAGINAS (SIDEBAR)
