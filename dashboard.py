@@ -1028,14 +1028,14 @@ def renderizar_mapa_interativo(chave, mostrar_titulo=True, altura=480):
         )
         fig_mapa.add_trace(fig_destaque)
 
+    aplicar_tema_grafico(fig_mapa)
     fig_mapa.update_geos(fitbounds="locations", visible=False, bgcolor="rgba(0,0,0,0)")
     fig_mapa.update_layout(
         title_text="",
-        coloraxis_showscale=True,
-        coloraxis_colorbar=dict(title="Valor (R$)", tickfont=dict(color="#B8C0CC")),
+        coloraxis_showscale=False,
         height=altura,
+        margin=dict(l=0, r=0, t=0, b=0),
     )
-    aplicar_tema_grafico(fig_mapa)
 
     try:
         evento = st.plotly_chart(fig_mapa, use_container_width=True, on_select="rerun", key=f"mapa_brasil_click_{chave}")
