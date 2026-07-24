@@ -33,6 +33,10 @@ footer {visibility: hidden;}
 [data-testid="stAppViewContainer"] { background-color: var(--bg-overlay) !important; }
 [data-testid="stMain"], [data-testid="stMainBlockContainer"], .main, .main > div { background-color: transparent !important; }
 h1, h2, h3, h4, h5, h6, p, label, div, span, li, a, [class*="st-"], [data-testid] { color: var(--text) !important; font-family: 'Nunito', sans-serif !important; }
+[data-testid="stIconMaterial"], .material-symbols-outlined, .material-icons, span[class*="material-symbols"] { font-family: 'Material Symbols Outlined' !important; line-height: 1 !important; }
+[data-testid="stExpander"] summary { display: flex !important; align-items: center !important; gap: 8px !important; }
+[data-testid="stExpander"] summary span { position: static !important; }
+[data-testid="stFileUploaderDropzone"] { flex-wrap: wrap !important; }
 input, textarea, select { background-color: var(--input-bg) !important; border: 1px solid var(--input-border) !important; border-radius: 8px !important; color: var(--input-text) !important; -webkit-text-fill-color: var(--input-text) !important; }
 [data-testid="stSelectbox"] > div > div, [data-baseweb="select"] > div { background-color: var(--input-bg) !important; border: 1px solid var(--input-border) !important; border-radius: 8px !important; color: var(--input-text) !important; }
 [data-baseweb="popover"], [data-baseweb="menu"], ul[data-baseweb="menu"] { background-color: var(--menu-bg) !important; border: 1px solid var(--border) !important; }
