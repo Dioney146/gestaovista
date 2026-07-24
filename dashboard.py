@@ -416,8 +416,8 @@ st.markdown("---")
 # ==================================================
 # ABAS
 # ==================================================
-tab_estados, tab1, tab2, tab3, tab4 = st.tabs([
-    "Por Estados", "Por Municipio", "Por Supervisor", "Por Praca", "Detalhes dos Pedidos"
+tab_estados, tab1, tab3, tab4 = st.tabs([
+    "Por Estados", "Por Municipio", "Por Praca", "Detalhes dos Pedidos"
 ])
 
 def mostrar_kpis_globais():
@@ -538,85 +538,6 @@ with tab1:
                 xaxis=dict(title="", tickprefix="R$ ", separatethousands=True),
             )
             st.plotly_chart(fig, use_container_width=True)
-
-# ---------- ABA 2: POR SUPERVISOR ----------
-with tab2:
-    mostrar_kpis_globais()
-    st.subheader("Quantitativo por Supervisor")
-
-    if "NOMESUP" not in df_filtrado.columns:
-        st.warning("Coluna NOMESUP nao encontrada na planilha.")
-    elif df_filtrado.empty:
-        st.info("Nenhum dado disponivel com os filtros selecionados.")
-    else:
-        sup_df = df_filtrado.groupby("NOMESUP").agg(
-            Pedidos     =("NUMPED",       "count"),
-            Valor_Total =("VLTOTAL",      "sum"),
-            Peso_Total  =("PESOBRUTOTOT", "sum")
-        ).reset_index().sort_values("Pedidos", ascending=False)
-
-        sup_df["Valor_FMT"] = sup_df["Valor_Total"].apply(fmt_brl)
-        sup_df["Peso_FMT"]  = sup_df["Peso_Total"].apply(fmt_kg)
-
-        total_sups = len(sup_df)
-        top_sup    = sup_df.iloc[0]["NOMESUP"]
-        top_ped    = int(sup_df.iloc[0]["Pedidos"])
-
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Total de Supervisores", total_sups)
-        k2.metric("Supervisor Lider", top_sup)
-        k3.metric("Pedidos do Lider", top_ped)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_g1, col_g2 = st.columns(2)
-
-        with col_g1:
-            fig_ped = px.bar(
-                sup_df.sort_values("Pedidos"),
-                x="Pedidos", y="NOMESUP", orientation="h",
-                title="Pedidos por Supervisor", color="Pedidos",
-                color_continuous_scale=["#b35c00", "#ffb400", "#ffe066"],
-                custom_data=["Valor_FMT"], text="Pedidos",
-            )
-            fig_ped.update_traces(
-                marker_line_width=0, textposition="outside",
-                textfont=dict(color="white", size=12),
-                hovertemplate="<b>%{y}</b><br>Pedidos: %{x}<br>Valor: %{customdata[0]}<extra></extra>"
-            )
-            fig_ped.update_layout(
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                font_color="white", title_font_size=14, coloraxis_showscale=False,
-                margin=dict(l=0, r=60, t=40, b=10),
-                yaxis=dict(title=""), xaxis=dict(title=""),
-            )
-            st.plotly_chart(fig_ped, use_container_width=True)
-
-        with col_g2:
-            fig_pie = px.pie(
-                sup_df, names="NOMESUP", values="Valor_Total",
-                title="Participacao por Valor (R$)",
-                color_discrete_sequence=px.colors.sequential.Oranges_r,
-                custom_data=["Valor_FMT"],
-            )
-            fig_pie.update_traces(
-                textposition="inside", textinfo="percent+label",
-                hovertemplate="<b>%{label}</b><br>Valor: %{customdata[0]}<br>Participacao: %{percent}<extra></extra>"
-            )
-            fig_pie.update_layout(
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                font_color="white", title_font_size=14,
-                legend=dict(font=dict(color="white")),
-                margin=dict(l=0, r=0, t=40, b=10),
-            )
-            st.plotly_chart(fig_pie, use_container_width=True)
-
-        st.subheader("Tabela Resumo por Supervisor")
-        tabela_sup = sup_df[["NOMESUP", "Pedidos", "Valor_FMT", "Peso_FMT"]].rename(columns={
-            "NOMESUP"   : "Supervisor",
-            "Valor_FMT" : "Valor Total",
-            "Peso_FMT"  : "Peso Total",
-        })
-        st.markdown(tabela_html(tabela_sup), unsafe_allow_html=True)
 
 # ---------- ABA 3: POR PRACA ----------
 with tab3:
