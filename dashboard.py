@@ -843,23 +843,37 @@ def renderizar_por_estados():
 
     estado_df = resumo_por_estado(df_filtrado)
 
-    col_tabela, col_grafico = st.columns([1.2, 1])
-    with col_tabela:
-        st.markdown(montar_tabela_com_total(estado_df, "Estado"), unsafe_allow_html=True)
+    st.markdown(montar_tabela_com_total(estado_df, "Estado"), unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    col_grafico, col_mapa = st.columns([1, 1.15])
 
     with col_grafico:
+        estado_ordenado = estado_df.sort_values("Valor")
         fig_estado = px.bar(
-            estado_df.sort_values("Valor"), x="Valor", y="Estado", orientation="h",
+            estado_ordenado, x="Valor", y="Estado", orientation="h",
             title="Valor por Estado", color="Valor", color_continuous_scale=GRADIENTE_LARANJA,
             custom_data=["Pedidos"],
         )
-        fig_estado.update_traces(marker_line_width=0, hovertemplate="<b>%{y}</b><br>Valor: R$ %{x:,.2f}<br>Pedidos: %{customdata[0]}<extra></extra>")
-        fig_estado.update_layout(yaxis=dict(autorange="reversed", title=""), xaxis=dict(title="", tickprefix="R$ ", separatethousands=True), coloraxis_showscale=False)
+        fig_estado.update_traces(
+            marker_line_width=0,
+            text=estado_ordenado["Valor"].apply(fmt_brl),
+            textposition="outside",
+            textfont=dict(color="#FFFFFF", size=12),
+            cliponaxis=False,
+            hovertemplate="<b>%{y}</b><br>Valor: R$ %{x:,.2f}<br>Pedidos: %{customdata[0]}<extra></extra>",
+        )
+        fig_estado.update_layout(
+            yaxis=dict(autorange="reversed", title=""),
+            xaxis=dict(title="", tickprefix="R$ ", separatethousands=True, range=[0, estado_ordenado["Valor"].max() * 1.22]),
+            coloraxis_showscale=False,
+            height=480,
+        )
         aplicar_tema_grafico(fig_estado)
         st.plotly_chart(fig_estado, use_container_width=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    renderizar_mapa_interativo(chave="aba_estados", mostrar_titulo=False)
+    with col_mapa:
+        renderizar_mapa_interativo(chave="aba_estados", mostrar_titulo=False)
 
 def renderizar_por_municipio():
     st.subheader("Resumo por Municipio")
