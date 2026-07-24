@@ -390,6 +390,15 @@ def detectar_estado_pelo_nome(nome_arquivo):
         return "SP"
     return None
 
+def detectar_tipo_pelo_nome(nome_arquivo):
+    """Identifica se o arquivo enviado e de pedidos LIBERADOS ou MONTADOS."""
+    nome = nome_arquivo.upper()
+    if "MONTAD" in nome:
+        return "MONTADOS"
+    if "LIBERAD" in nome:
+        return "LIBERADOS"
+    return None
+
 # ==================================================
 # FUNCOES DE FORMATACAO
 # ==================================================
@@ -659,27 +668,40 @@ pagina_ativa = st.session_state["pagina_ativa"]
 # ==================================================
 with st.expander("📥 Importar dados", expanded=("dados_carregados" not in st.session_state)):
     arquivos = st.file_uploader(
-        "Arraste os arquivos de todos os estados aqui — o estado de cada um e identificado automaticamente",
+        "Arraste os arquivos de LIBERADOS e MONTADOS de todos os estados aqui — estado e tipo sao identificados automaticamente",
         type=["xlsx", "xls", "csv"],
         accept_multiple_files=True,
     )
 
     mapa_estado_manual = {}
+    mapa_tipo_manual = {}
 
     if arquivos:
-        nao_identificados = [a for a in arquivos if detectar_estado_pelo_nome(a.name) is None]
+        estado_indef = [a for a in arquivos if detectar_estado_pelo_nome(a.name) is None]
+        tipo_indef   = [a for a in arquivos if detectar_tipo_pelo_nome(a.name) is None]
 
-        if nao_identificados:
-            st.caption("Nao identifiquei o estado destes arquivos pelo nome — selecione manualmente:")
-            for arq in nao_identificados:
-                col_nome, col_sel = st.columns([3, 1])
+        if estado_indef or tipo_indef:
+            st.caption("Nao identifiquei automaticamente alguns arquivos — confirme manualmente:")
+            for arq in arquivos:
+                precisa_estado = arq in estado_indef
+                precisa_tipo = arq in tipo_indef
+                if not precisa_estado and not precisa_tipo:
+                    continue
+                col_nome, col_tipo, col_est = st.columns([2.4, 1, 1])
                 with col_nome:
                     st.write(arq.name)
-                with col_sel:
-                    mapa_estado_manual[arq.name] = st.selectbox(
-                        "Estado", list(ESTADOS_LABELS.keys()),
-                        key=f"manual_{arq.name}", label_visibility="collapsed"
-                    )
+                with col_tipo:
+                    if precisa_tipo:
+                        mapa_tipo_manual[arq.name] = st.selectbox(
+                            "Tipo", ["LIBERADOS", "MONTADOS"],
+                            key=f"tipo_{arq.name}", label_visibility="collapsed"
+                        )
+                with col_est:
+                    if precisa_estado:
+                        mapa_estado_manual[arq.name] = st.selectbox(
+                            "Estado", list(ESTADOS_LABELS.keys()),
+                            key=f"manual_{arq.name}", label_visibility="collapsed"
+                        )
 
     col_btn1, col_btn2 = st.columns([1, 1])
     with col_btn1:
@@ -689,6 +711,7 @@ with st.expander("📥 Importar dados", expanded=("dados_carregados" not in st.s
 
     if limpar:
         st.session_state.pop("dados_carregados", None)
+        st.session_state.pop("dados_montados", None)
         st.session_state.pop("erros_importacao", None)
         st.rerun()
 
@@ -696,27 +719,41 @@ with st.expander("📥 Importar dados", expanded=("dados_carregados" not in st.s
         if not arquivos:
             st.warning("Nenhum arquivo foi enviado. Selecione ao menos um arquivo e clique em processar novamente.")
         else:
-            frames = []
+            frames_liberados = []
+            frames_montados = []
             erros = []
             for arquivo in arquivos:
                 try:
                     estado = detectar_estado_pelo_nome(arquivo.name) or mapa_estado_manual.get(arquivo.name)
+                    tipo   = detectar_tipo_pelo_nome(arquivo.name) or mapa_tipo_manual.get(arquivo.name) or "LIBERADOS"
                     if estado is None:
                         erros.append(f"{arquivo.name}: nao foi possivel identificar o estado.")
                         continue
-                    df_estado = ler_arquivo_upload(arquivo)
-                    df_estado = tratar_dataframe(df_estado)
-                    df_estado["ESTADO"] = estado
-                    frames.append(df_estado)
+                    df_arquivo = ler_arquivo_upload(arquivo)
+                    df_arquivo = tratar_dataframe(df_arquivo)
+                    df_arquivo["ESTADO"] = estado
+                    if tipo == "MONTADOS":
+                        frames_montados.append(df_arquivo)
+                    else:
+                        frames_liberados.append(df_arquivo)
                 except Exception as e:
                     erros.append(f"{arquivo.name}: {e}")
 
             st.session_state["erros_importacao"] = erros
+            mensagens_ok = []
 
-            if frames:
-                estados_processados = sorted(set(f["ESTADO"].iloc[0] for f in frames))
-                st.session_state["dados_carregados"] = pd.concat(frames, ignore_index=True)
-                st.success(f"Dados importados com sucesso! Estados: {', '.join(estados_processados)}")
+            if frames_liberados:
+                estados_lib = sorted(set(f["ESTADO"].iloc[0] for f in frames_liberados))
+                st.session_state["dados_carregados"] = pd.concat(frames_liberados, ignore_index=True)
+                mensagens_ok.append(f"Liberados: {', '.join(estados_lib)}")
+
+            if frames_montados:
+                estados_mont = sorted(set(f["ESTADO"].iloc[0] for f in frames_montados))
+                st.session_state["dados_montados"] = pd.concat(frames_montados, ignore_index=True)
+                mensagens_ok.append(f"Montados: {', '.join(estados_mont)}")
+
+            if mensagens_ok:
+                st.success("Dados importados com sucesso! " + " | ".join(mensagens_ok))
             elif not erros:
                 st.warning("Nenhum arquivo valido foi processado.")
 
@@ -726,10 +763,11 @@ if st.session_state.get("erros_importacao"):
             st.write(e)
 
 if "dados_carregados" not in st.session_state:
-    st.info("Envie os arquivos acima e clique em 'Processar dados' para comecar.")
+    st.info("Envie os arquivos de LIBERADOS acima e clique em 'Processar dados' para comecar.")
     st.stop()
 
 df = st.session_state["dados_carregados"]
+df_montados_bruto = st.session_state.get("dados_montados", pd.DataFrame())
 
 if df.empty:
     st.warning("Os arquivos importados nao geraram nenhum pedido valido. Confira os arquivos e tente novamente.")
@@ -803,6 +841,14 @@ if posicao_sel != "Todas" and "POSICAO" in df_filtrado.columns:
 if tipo_sel != "Todos" and "TIPOVENDA" in df_filtrado.columns:
     df_filtrado = df_filtrado[df_filtrado["TIPOVENDA"].astype(str) == tipo_sel]
 
+# Mesmos filtros de Estado/Cidade aplicados aos MONTADOS (quando importados)
+df_montados_filtrado = df_montados_bruto.copy()
+if not df_montados_filtrado.empty:
+    if estados_sel and "ESTADO" in df_montados_filtrado.columns:
+        df_montados_filtrado = df_montados_filtrado[df_montados_filtrado["ESTADO"].isin(estados_sel)]
+    if cidades_sel and "CIDADE" in df_montados_filtrado.columns:
+        df_montados_filtrado = df_montados_filtrado[df_montados_filtrado["CIDADE"].isin(cidades_sel)]
+
 # ==================================================
 # KPIs PREMIUM
 # ==================================================
@@ -834,8 +880,6 @@ def renderizar_kpis():
 # ==================================================
 # RENDERIZADORES DE CADA VISAO
 # ==================================================
-def renderizar_por_estados():
-    st.subheader("Resumo por Estado")
 def renderizar_por_estados():
     if "ESTADO" not in df_filtrado.columns or df_filtrado.empty:
         st.info("Nenhum dado disponivel.")
@@ -971,6 +1015,91 @@ def renderizar_detalhes():
     st.caption(f"{fmt_int(len(df_exib))} pedidos encontrados")
     st.markdown(tabela_premium_html(formatar_tabela(df_exib), coluna_barra=None), unsafe_allow_html=True)
 
+def calcular_pendentes_montados(df_montados, df_liberados):
+    """Compara Montados x Liberados (por ESTADO + NUMPED) e devolve os pedidos
+    que foram montados mas ainda nao aparecem como liberados (ficaram para tras)."""
+    if df_montados.empty or "NUMPED" not in df_montados.columns:
+        return df_montados.iloc[0:0]
+
+    if df_liberados.empty or "NUMPED" not in df_liberados.columns:
+        return df_montados.copy()
+
+    chave_lib = set(zip(df_liberados["ESTADO"].astype(str), df_liberados["NUMPED"].astype(str)))
+    chave_mont = list(zip(df_montados["ESTADO"].astype(str), df_montados["NUMPED"].astype(str)))
+    mascara_pendente = [c not in chave_lib for c in chave_mont]
+    return df_montados[mascara_pendente].copy()
+
+def renderizar_montados():
+    st.subheader("Montados x Liberados")
+
+    if df_montados_bruto.empty:
+        st.markdown('<div class="glass-box">', unsafe_allow_html=True)
+        st.write("Nenhum arquivo de **MONTADOS** foi importado ainda. Abra 'Importar dados' no topo da pagina e envie os arquivos "
+                  "(ex: MONTADOS_AM, MONTADOS_SP, MONTADOS_D.F...) junto com os de LIBERADOS — o tipo de cada arquivo e identificado "
+                  "automaticamente pelo nome.")
+        st.markdown('</div>', unsafe_allow_html=True)
+        return
+
+    df_pendentes = calcular_pendentes_montados(df_montados_filtrado, df_filtrado)
+
+    total_montados  = len(df_montados_filtrado)
+    total_liberados = len(df_filtrado)
+    total_pendentes = len(df_pendentes)
+    pct_atendido = ((total_montados - total_pendentes) / total_montados * 100) if total_montados else 0
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(kpi_card_premium("🧩", "Total Montados", fmt_int(total_montados), "Pedidos montados no periodo", []), unsafe_allow_html=True)
+    with c2:
+        st.markdown(kpi_card_premium("🚚", "Total Liberados", fmt_int(total_liberados), "Pedidos liberados no periodo", []), unsafe_allow_html=True)
+    with c3:
+        st.markdown(kpi_card_premium("⏳", "Ficaram para Tras", fmt_int(total_pendentes), "Montados sem liberacao ainda", [], cor="#ef4444"), unsafe_allow_html=True)
+    with c4:
+        st.markdown(kpi_card_premium("✅", "% Atendimento", f"{pct_atendido:.1f}%", "Montados ja liberados", []), unsafe_allow_html=True)
+
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+    col_graf, col_tab = st.columns([1, 1.3])
+
+    with col_graf:
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        st.markdown('<p class="painel-titulo"><span class="ic">📊</span>Montados x Pendentes por Estado</p>', unsafe_allow_html=True)
+        if "ESTADO" in df_montados_filtrado.columns and not df_montados_filtrado.empty:
+            montados_por_estado = df_montados_filtrado.groupby("ESTADO")["NUMPED"].count().rename("Montados")
+            pendentes_por_estado = df_pendentes.groupby("ESTADO")["NUMPED"].count().rename("Pendentes") if not df_pendentes.empty else pd.Series(dtype=int, name="Pendentes")
+            comparativo = pd.concat([montados_por_estado, pendentes_por_estado], axis=1).fillna(0).reset_index()
+
+            fig_comp = go.Figure()
+            fig_comp.add_bar(name="Montados", x=comparativo["ESTADO"], y=comparativo["Montados"], marker_color="#F59E0B")
+            fig_comp.add_bar(name="Ficaram para tras", x=comparativo["ESTADO"], y=comparativo["Pendentes"], marker_color="#ef4444")
+            fig_comp.update_layout(barmode="group", height=340, legend=dict(orientation="h", y=1.15))
+            aplicar_tema_grafico(fig_comp)
+            st.plotly_chart(fig_comp, use_container_width=True)
+        else:
+            st.info("Sem dados suficientes para comparar por estado.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_tab:
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        st.markdown('<p class="painel-titulo"><span class="ic">⏳</span>Pedidos Montados que Ficaram para Tras</p>', unsafe_allow_html=True)
+
+        if df_pendentes.empty:
+            st.success("Nenhum pedido montado ficou para tras — tudo liberado! 🎉")
+        else:
+            colunas_pend = [c for c in ["NUMPED", "ESTADO", "NOMECLIENTE", "CIDADE", "NOMESUP", "VLTOTAL", "PESOBRUTOTOT", "DATA"] if c in df_pendentes.columns]
+            df_pend_exib = df_pendentes[colunas_pend].copy()
+            if "VLTOTAL" in df_pend_exib.columns:
+                df_pend_exib = df_pend_exib.sort_values("VLTOTAL", ascending=False)
+
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                formatar_tabela(df_pend_exib).to_excel(writer, index=False, sheet_name="Pendentes")
+            st.download_button("⬇️ Exportar pendentes", data=buffer.getvalue(), file_name="montados_pendentes.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+            st.markdown(tabela_premium_html(formatar_tabela(df_pend_exib), max_height=340), unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
 def renderizar_mapa_interativo(chave, mostrar_titulo=True, altura=480):
     if mostrar_titulo:
         st.subheader("Mapa do Brasil - Valor por Estado")
@@ -1097,10 +1226,11 @@ def renderizar_rodape():
 renderizar_kpis()
 
 if pagina_ativa == "Dashboard":
-    tabs = st.tabs(["Por Estados", "Por Municipio", "Detalhes dos Pedidos"])
+    tabs = st.tabs(["Por Estados", "Por Municipio", "Detalhes dos Pedidos", "Montados"])
     with tabs[0]: renderizar_por_estados()
     with tabs[1]: renderizar_por_municipio()
     with tabs[2]: renderizar_detalhes()
+    with tabs[3]: renderizar_montados()
 
 elif pagina_ativa == "Pedidos":
     renderizar_detalhes()
