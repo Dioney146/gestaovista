@@ -359,6 +359,58 @@ def tratar_dataframe(df):
     df = df.reset_index(drop=True)
     return df
 
+# Mapeamento das colunas da planilha de MONTADOS (RoadNet) para os nomes padrao do sistema
+COLUNAS_MONTADOS = {
+    "Número do pedido": "NUMPED",
+    "Entrega Valor":    "VLTOTAL",
+    "Entrega Peso":     "PESOBRUTOTOT",
+    "Cliente":          "NOMECLIENTE",
+    "Cidade":           "CIDADE",
+    "Data de término":  "DATA",
+    "Gerenciado Por":   "NOMESUP",
+    "FILIAL":           "CODFILIAL",
+    "Tipo":             "TIPO_MONTADO",
+    "Estado da Ordem":  "STATUS_MONTADO",
+}
+
+def tratar_dataframe_montados(df):
+    """Limpeza dedicada para a planilha de MONTADOS, que usa colunas diferentes da de Liberados."""
+    df = df.copy()
+    df = df.rename(columns={k: v for k, v in COLUNAS_MONTADOS.items() if k in df.columns})
+    df = df.fillna(0)
+
+    for col in ["VLTOTAL", "PESOBRUTOTOT"]:
+        if col in df.columns:
+            df[col] = df[col].apply(parse_numero_brl)
+
+    if "DATA" in df.columns:
+        try:
+            df["DATA"] = pd.to_datetime(df["DATA"], errors="coerce", dayfirst=True)
+        except Exception:
+            pass
+
+    cols_texto = ["NOMECLIENTE", "CIDADE", "NOMESUP", "STATUS_MONTADO", "TIPO_MONTADO", "CODFILIAL"]
+    for col in cols_texto:
+        if col in df.columns:
+            df[col] = df[col].replace(0, "").astype(str).str.strip()
+
+    if "NUMPED" in df.columns:
+        df["NUMPED"] = normalizar_numped(df["NUMPED"])
+        df = df[df["NUMPED"] != ""]
+        df = df.drop_duplicates(subset=["NUMPED"])
+
+    df = df.reset_index(drop=True)
+    return df
+
+def normalizar_numped(serie):
+    """Normaliza numeros de pedido para string, sem sufixo '.0' e sem espacos,
+    para permitir comparar Montados x Liberados com seguranca."""
+    numeros = pd.to_numeric(serie, errors="coerce")
+    resultado = numeros.astype("Int64").astype(str)
+    resultado = resultado.where(numeros.notna(), serie.astype(str).str.strip())
+    resultado = resultado.replace("<NA>", "").str.strip()
+    return resultado
+
 def ler_arquivo_upload(arquivo):
     """Le um arquivo enviado pelo usuario (.xlsx, .xls ou .csv) para um DataFrame."""
     nome = arquivo.name.lower()
@@ -730,7 +782,10 @@ with st.expander("📥 Importar dados", expanded=("dados_carregados" not in st.s
                         erros.append(f"{arquivo.name}: nao foi possivel identificar o estado.")
                         continue
                     df_arquivo = ler_arquivo_upload(arquivo)
-                    df_arquivo = tratar_dataframe(df_arquivo)
+                    if tipo == "MONTADOS":
+                        df_arquivo = tratar_dataframe_montados(df_arquivo)
+                    else:
+                        df_arquivo = tratar_dataframe(df_arquivo)
                     df_arquivo["ESTADO"] = estado
                     if tipo == "MONTADOS":
                         frames_montados.append(df_arquivo)
@@ -1024,8 +1079,11 @@ def calcular_pendentes_montados(df_montados, df_liberados):
     if df_liberados.empty or "NUMPED" not in df_liberados.columns:
         return df_montados.copy()
 
-    chave_lib = set(zip(df_liberados["ESTADO"].astype(str), df_liberados["NUMPED"].astype(str)))
-    chave_mont = list(zip(df_montados["ESTADO"].astype(str), df_montados["NUMPED"].astype(str)))
+    numped_lib  = normalizar_numped(df_liberados["NUMPED"])
+    numped_mont = normalizar_numped(df_montados["NUMPED"])
+
+    chave_lib = set(zip(df_liberados["ESTADO"].astype(str), numped_lib))
+    chave_mont = list(zip(df_montados["ESTADO"].astype(str), numped_mont))
     mascara_pendente = [c not in chave_lib for c in chave_mont]
     return df_montados[mascara_pendente].copy()
 
