@@ -146,6 +146,23 @@ def tratar_dataframe(df):
         if col in df.columns:
             df[col] = df[col].replace(0, "").astype(str)
 
+    # ------------------------------------------------
+    # Remove linhas de TOTAIS/RESUMO que vem junto na planilha.
+    # Pedidos reais sempre tem POSICAO = "L" (Liberado) ou "M" (Montado)
+    # e um NUMPED numerico valido. Linhas de total costumam trazer
+    # codigo de filial (ex: 308, 439, 801) na coluna POSICAO e/ou
+    # NUMPED vazio - essas sao descartadas para nao duplicar valores.
+    # ------------------------------------------------
+    if "POSICAO" in df.columns:
+        posicao_valida = df["POSICAO"].astype(str).str.strip().str.upper().isin(["L", "M"])
+        df = df[posicao_valida]
+
+    if "NUMPED" in df.columns:
+        numped_valido = pd.to_numeric(df["NUMPED"], errors="coerce").notna()
+        df = df[numped_valido]
+
+    df = df.reset_index(drop=True)
+
     return df
 
 @st.cache_data(ttl=INTERVALO_ATUALIZACAO_SEGUNDOS, show_spinner=False)
