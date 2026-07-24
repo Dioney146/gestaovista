@@ -2,6 +2,7 @@
 import pandas as pd
 import streamlit as st
 import io
+import re
 import plotly.express as px
 import plotly.graph_objects as go
 
@@ -152,25 +153,59 @@ def ler_arquivo_upload(arquivo):
     else:
         return pd.read_excel(arquivo, engine="openpyxl")
 
+def detectar_estado_pelo_nome(nome_arquivo):
+    """Tenta identificar a sigla do estado a partir do nome do arquivo enviado."""
+    nome = nome_arquivo.upper()
+
+    def tem(padrao):
+        return re.search(padrao, nome) is not None
+
+    if tem(r'(?<![A-Z0-9])(WFS|SPW)(?![A-Z0-9])'):
+        return "SPW"
+    if tem(r'MG[\.\-_ ]?ES') or "MINAS GERAIS" in nome:
+        return "MG.ES"
+    if tem(r'D[\.\-_ ]?F(?![A-Z0-9])') or "DISTRITO FEDERAL" in nome:
+        return "DF"
+    if tem(r'(?<![A-Z0-9])BA(?![A-Z0-9])') or "BAHIA" in nome:
+        return "BA"
+    if tem(r'(?<![A-Z0-9])AM(?![A-Z0-9])') or "AMAZONAS" in nome:
+        return "AM"
+    if tem(r'(?<![A-Z0-9])SP(?![A-Z0-9])') or "SAO PAULO" in nome:
+        return "SP"
+    return None
+
 # ==================================================
 # IMPORTACAO DE DADOS (upload manual, direto no site)
 # ==================================================
-st.markdown('<p class="filter-title">Importar Dados</p>', unsafe_allow_html=True)
+with st.expander("📥 Importar dados", expanded=("dados_carregados" not in st.session_state)):
+    arquivos = st.file_uploader(
+        "Arraste os arquivos de todos os estados aqui — o estado de cada um e identificado automaticamente",
+        type=["xlsx", "xls", "csv"],
+        accept_multiple_files=True,
+    )
 
-with st.expander("📥 Importar planilhas por estado", expanded=("dados_carregados" not in st.session_state)):
-    st.caption("Envie o arquivo (.xlsx, .xls ou .csv) de cada estado que quiser incluir. Nao precisa enviar todos de uma vez.")
+    mapa_estado_manual = {}
 
-    cols_upload = st.columns(3)
-    arquivos_upload = {}
-    for i, (sigla, label) in enumerate(ESTADOS_LABELS.items()):
-        with cols_upload[i % 3]:
-            arquivos_upload[sigla] = st.file_uploader(label, type=["xlsx", "xls", "csv"], key=f"upload_{sigla}")
+    if arquivos:
+        nao_identificados = [a for a in arquivos if detectar_estado_pelo_nome(a.name) is None]
+
+        if nao_identificados:
+            st.caption("Nao identifiquei o estado destes arquivos pelo nome — selecione manualmente:")
+            for arq in nao_identificados:
+                col_nome, col_sel = st.columns([3, 1])
+                with col_nome:
+                    st.write(arq.name)
+                with col_sel:
+                    mapa_estado_manual[arq.name] = st.selectbox(
+                        "Estado", list(ESTADOS_LABELS.keys()),
+                        key=f"manual_{arq.name}", label_visibility="collapsed"
+                    )
 
     col_btn1, col_btn2 = st.columns([1, 1])
     with col_btn1:
-        processar = st.button("📊 Processar dados importados", type="primary", use_container_width=True)
+        processar = st.button("Processar dados", type="primary", use_container_width=True)
     with col_btn2:
-        limpar = st.button("🗑️ Limpar dados carregados", use_container_width=True)
+        limpar = st.button("Limpar dados carregados", use_container_width=True)
 
     if limpar:
         st.session_state.pop("dados_carregados", None)
@@ -178,25 +213,32 @@ with st.expander("📥 Importar planilhas por estado", expanded=("dados_carregad
         st.rerun()
 
     if processar:
-        frames = []
-        erros = []
-        for sigla, arquivo in arquivos_upload.items():
-            if arquivo is not None:
+        if not arquivos:
+            st.warning("Nenhum arquivo foi enviado. Selecione ao menos um arquivo e clique em processar novamente.")
+        else:
+            frames = []
+            erros = []
+            for arquivo in arquivos:
                 try:
+                    estado = detectar_estado_pelo_nome(arquivo.name) or mapa_estado_manual.get(arquivo.name)
+                    if estado is None:
+                        erros.append(f"{arquivo.name}: nao foi possivel identificar o estado.")
+                        continue
                     df_estado = ler_arquivo_upload(arquivo)
                     df_estado = tratar_dataframe(df_estado)
-                    df_estado["ESTADO"] = sigla
+                    df_estado["ESTADO"] = estado
                     frames.append(df_estado)
                 except Exception as e:
-                    erros.append(f"{sigla}: {e}")
+                    erros.append(f"{arquivo.name}: {e}")
 
-        st.session_state["erros_importacao"] = erros
+            st.session_state["erros_importacao"] = erros
 
-        if frames:
-            st.session_state["dados_carregados"] = pd.concat(frames, ignore_index=True)
-            st.success(f"Dados importados com sucesso! ({len(frames)} estado(s) processado(s))")
-        elif not erros:
-            st.warning("Nenhum arquivo foi enviado. Selecione ao menos um arquivo e clique em processar novamente.")
+            if frames:
+                estados_processados = sorted(set(f["ESTADO"].iloc[0] for f in frames))
+                st.session_state["dados_carregados"] = pd.concat(frames, ignore_index=True)
+                st.success(f"Dados importados com sucesso! Estados: {', '.join(estados_processados)}")
+            elif not erros:
+                st.warning("Nenhum arquivo valido foi processado.")
 
 if st.session_state.get("erros_importacao"):
     with st.expander(f"⚠️ {len(st.session_state['erros_importacao'])} erro(s) na importacao"):
@@ -204,7 +246,7 @@ if st.session_state.get("erros_importacao"):
             st.write(e)
 
 if "dados_carregados" not in st.session_state:
-    st.info("Faca upload das planilhas de pelo menos um estado acima e clique em 'Processar dados importados' para comecar.")
+    st.info("Envie os arquivos acima e clique em 'Processar dados' para comecar.")
     st.stop()
 
 df = st.session_state["dados_carregados"]
