@@ -81,7 +81,7 @@ html, body, .stApp {
 }
 [data-testid="stAppViewContainer"] { background: transparent !important; position: relative; z-index: 1; }
 [data-testid="stMain"], [data-testid="stMainBlockContainer"], .main, .main > div { background-color: transparent !important; }
-.block-container { padding: 1.4rem 2rem 2rem 2rem !important; max-width: 100% !important; position: relative; z-index: 1; }
+.block-container { padding: 1rem 1.6rem 1.4rem 1.6rem !important; max-width: 100% !important; position: relative; z-index: 1; }
 
 /* Particulas discretas */
 .particulas { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
@@ -159,6 +159,14 @@ h1, h2, h3, h4, h5, h6, p, label, li, a { color: var(--text-main) !important; fo
 @keyframes fadeInUp { from { opacity:0; transform: translateY(10px);} to {opacity:1; transform:translateY(0);} }
 
 .filter-title { font-size: 12px !important; text-transform: uppercase; letter-spacing: 1.6px; color: var(--accent-soft) !important; margin-bottom: 10px; font-weight:700; display:flex; align-items:center; gap:6px; }
+
+.painel {
+    background: var(--bg-card-soft); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border-soft); border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card); padding: 14px 16px; margin-bottom: 14px;
+}
+.painel-titulo { display:flex; align-items:center; gap:8px; font-size: 14.5px !important; font-weight:700 !important; color:#fff !important; margin: 0 0 10px 0 !important; }
+.painel-titulo .ic { font-size: 15px; }
 
 /* ---------- INPUTS / FILTROS PREMIUM ---------- */
 input, textarea, select { background-color: rgba(255,255,255,0.04) !important; border: 1px solid var(--border-soft) !important; border-radius: 12px !important; color: #fff !important; -webkit-text-fill-color: #fff !important; }
@@ -534,7 +542,7 @@ def resumo_por_estado(df):
     resumo.rename(columns={"ESTADO": "Estado"}, inplace=True)
     return resumo
 
-def montar_tabela_com_total(df_num, col_rotulo, col_barra=None):
+def montar_tabela_com_total(df_num, col_rotulo, col_barra=None, max_height=480):
     """Recebe um dataframe numerico (Pedidos/Valor/Peso) e devolve o HTML premium
     ja formatado, com linha de Total Geral destacada."""
     df_fmt = df_num.copy()
@@ -565,14 +573,11 @@ def montar_tabela_com_total(df_num, col_rotulo, col_barra=None):
     )
 
     uid = f"tbltot_{abs(hash(str(cols)+str(len(df_fmt))))}"
-    return f"""
-    <div class="tabela-premium-wrap" style="max-height:480px;overflow-y:auto;">
-    <table class="tabela-premium" id="{uid}">
-        <thead><tr>{header}</tr></thead>
-        <tbody>{linhas}{linha_total}</tbody>
-    </table>
-    </div>
-    """
+    return (
+        f'<div class="tabela-premium-wrap" style="max-height:{max_height}px;overflow-y:auto;">'
+        f'<table class="tabela-premium" id="{uid}"><thead><tr>{header}</tr></thead>'
+        f'<tbody>{linhas}{linha_total}</tbody></table></div>'
+    )
 
 # ==================================================
 # TEMA PREMIUM PARA GRAFICOS PLOTLY
@@ -759,7 +764,7 @@ estados_carregados = sorted(df["ESTADO"].unique().tolist()) if "ESTADO" in df.co
 st.markdown('<div class="glass-box">', unsafe_allow_html=True)
 st.markdown('<p class="filter-title">🔎 Filtros</p>', unsafe_allow_html=True)
 
-col_f0, col_f1, col_f2, col_f3, col_f4 = st.columns([1.3, 2, 2, 1, 1])
+col_f0, col_f1, col_f3, col_f4 = st.columns([1.3, 2, 1, 1])
 
 with col_f0:
     estados_sel = st.multiselect("🌎 Estado", options=estados_carregados, placeholder="Todos os estados",
@@ -768,10 +773,6 @@ with col_f0:
 with col_f1:
     cidades_disp = sorted(df["CIDADE"].astype(str).unique().tolist()) if "CIDADE" in df.columns else []
     cidades_sel  = st.multiselect("🏙️ Cidade", options=cidades_disp, placeholder="Todas as cidades")
-
-with col_f2:
-    pracas_disp = sorted(df["PRACA"].astype(str).unique().tolist()) if "PRACA" in df.columns else []
-    pracas_sel  = st.multiselect("📌 Praca", options=pracas_disp, placeholder="Todas as pracas")
 
 with col_f3:
     if "POSICAO" in df.columns:
@@ -797,8 +798,6 @@ if estados_sel:
     df_filtrado = df_filtrado[df_filtrado["ESTADO"].isin(estados_sel)]
 if cidades_sel:
     df_filtrado = df_filtrado[df_filtrado["CIDADE"].isin(cidades_sel)]
-if pracas_sel:
-    df_filtrado = df_filtrado[df_filtrado["PRACA"].isin(pracas_sel)]
 if posicao_sel != "Todas" and "POSICAO" in df_filtrado.columns:
     df_filtrado = df_filtrado[df_filtrado["POSICAO"].astype(str) == posicao_sel]
 if tipo_sel != "Todos" and "TIPOVENDA" in df_filtrado.columns:
@@ -830,50 +829,61 @@ def renderizar_kpis():
         with coluna:
             st.markdown(kpi_card_premium(icone, label, valor, descricao, serie), unsafe_allow_html=True)
 
-    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
 # ==================================================
 # RENDERIZADORES DE CADA VISAO
 # ==================================================
 def renderizar_por_estados():
     st.subheader("Resumo por Estado")
+def renderizar_por_estados():
     if "ESTADO" not in df_filtrado.columns or df_filtrado.empty:
         st.info("Nenhum dado disponivel.")
         return
 
     estado_df = resumo_por_estado(df_filtrado)
+    estado_ordenado = estado_df.sort_values("Valor")
 
-    st.markdown(montar_tabela_com_total(estado_df, "Estado"), unsafe_allow_html=True)
-    st.markdown("<br>", unsafe_allow_html=True)
+    col_tabela, col_grafico, col_mapa = st.columns([1.05, 1.05, 0.95])
 
-    col_grafico, col_mapa = st.columns([1, 1.15])
+    with col_tabela:
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        st.markdown('<p class="painel-titulo"><span class="ic">📄</span>Resumo por Estado</p>', unsafe_allow_html=True)
+        st.markdown(montar_tabela_com_total(estado_df, "Estado", max_height=340), unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with col_grafico:
-        estado_ordenado = estado_df.sort_values("Valor")
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        st.markdown('<p class="painel-titulo"><span class="ic">📈</span>Valor por Estado</p>', unsafe_allow_html=True)
         fig_estado = px.bar(
             estado_ordenado, x="Valor", y="Estado", orientation="h",
-            title="Valor por Estado", color="Valor", color_continuous_scale=GRADIENTE_LARANJA,
+            title="", color="Valor", color_continuous_scale=GRADIENTE_LARANJA,
             custom_data=["Pedidos"],
         )
         fig_estado.update_traces(
             marker_line_width=0,
             text=estado_ordenado["Valor"].apply(fmt_brl),
             textposition="outside",
-            textfont=dict(color="#FFFFFF", size=12),
+            textfont=dict(color="#FFFFFF", size=11),
             cliponaxis=False,
             hovertemplate="<b>%{y}</b><br>Valor: R$ %{x:,.2f}<br>Pedidos: %{customdata[0]}<extra></extra>",
         )
         fig_estado.update_layout(
             yaxis=dict(autorange="reversed", title=""),
-            xaxis=dict(title="", tickprefix="R$ ", separatethousands=True, range=[0, estado_ordenado["Valor"].max() * 1.22]),
+            xaxis=dict(title="", tickprefix="R$ ", separatethousands=True, range=[0, estado_ordenado["Valor"].max() * 1.3]),
             coloraxis_showscale=False,
-            height=480,
+            height=340,
+            margin=dict(l=0, r=10, t=5, b=10),
         )
-        aplicar_tema_grafico(fig_estado)
+        aplicar_tema_grafico(fig_estado, titulo_size=1)
         st.plotly_chart(fig_estado, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with col_mapa:
-        renderizar_mapa_interativo(chave="aba_estados", mostrar_titulo=False)
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        st.markdown('<p class="painel-titulo"><span class="ic">🗺️</span>Distribuicao por Estado</p>', unsafe_allow_html=True)
+        renderizar_mapa_interativo(chave="aba_estados", mostrar_titulo=False, altura=340)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 def renderizar_por_municipio():
     st.subheader("Resumo por Municipio")
@@ -961,7 +971,7 @@ def renderizar_detalhes():
     st.caption(f"{fmt_int(len(df_exib))} pedidos encontrados")
     st.markdown(tabela_premium_html(formatar_tabela(df_exib), coluna_barra=None), unsafe_allow_html=True)
 
-def renderizar_mapa_interativo(chave, mostrar_titulo=True):
+def renderizar_mapa_interativo(chave, mostrar_titulo=True, altura=480):
     if mostrar_titulo:
         st.subheader("Mapa do Brasil - Valor por Estado")
 
@@ -1023,7 +1033,7 @@ def renderizar_mapa_interativo(chave, mostrar_titulo=True):
         title_text="",
         coloraxis_showscale=True,
         coloraxis_colorbar=dict(title="Valor (R$)", tickfont=dict(color="#B8C0CC")),
-        height=480,
+        height=altura,
     )
     aplicar_tema_grafico(fig_mapa)
 
