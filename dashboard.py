@@ -859,15 +859,7 @@ def renderizar_por_estados():
         st.plotly_chart(fig_estado, use_container_width=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-    fig_pizza_estado = px.pie(
-        estado_df, names="Estado", values="Valor", title="Participacao por Valor (R$) - Todos os Estados",
-        color_discrete_sequence=px.colors.sequential.Oranges_r, custom_data=["Pedidos"],
-        hole=0.45,
-    )
-    fig_pizza_estado.update_traces(textposition="inside", textinfo="percent+label",
-        hovertemplate="<b>%{label}</b><br>Valor: R$ %{value:,.2f}<br>Pedidos: %{customdata[0]}<extra></extra>")
-    aplicar_tema_grafico(fig_pizza_estado)
-    st.plotly_chart(fig_pizza_estado, use_container_width=True)
+    renderizar_mapa_interativo(chave="aba_estados", mostrar_titulo=False)
 
 def renderizar_por_municipio():
     st.subheader("Resumo por Municipio")
@@ -955,8 +947,10 @@ def renderizar_detalhes():
     st.caption(f"{fmt_int(len(df_exib))} pedidos encontrados")
     st.markdown(tabela_premium_html(formatar_tabela(df_exib), coluna_barra=None), unsafe_allow_html=True)
 
-def renderizar_mapa():
-    st.subheader("Mapa do Brasil - Valor por Estado")
+def renderizar_mapa_interativo(chave, mostrar_titulo=True):
+    if mostrar_titulo:
+        st.subheader("Mapa do Brasil - Valor por Estado")
+
     geo = obter_geojson_brasil()
     if geo is None:
         st.warning("Nao foi possivel carregar o mapa do Brasil no momento (sem acesso a internet ou fonte indisponivel).")
@@ -1010,14 +1004,14 @@ def renderizar_mapa():
         fig_mapa.add_trace(fig_destaque)
 
     fig_mapa.update_geos(fitbounds="locations", visible=False, bgcolor="rgba(0,0,0,0)")
-    fig_mapa.update_layout(coloraxis_showscale=True, coloraxis_colorbar=dict(title="Valor (R$)", tickfont=dict(color="#B8C0CC")), height=520)
+    fig_mapa.update_layout(coloraxis_showscale=True, coloraxis_colorbar=dict(title="Valor (R$)", tickfont=dict(color="#B8C0CC")), height=480)
     aplicar_tema_grafico(fig_mapa)
 
     try:
-        evento = st.plotly_chart(fig_mapa, use_container_width=True, on_select="rerun", key="mapa_brasil_click")
+        evento = st.plotly_chart(fig_mapa, use_container_width=True, on_select="rerun", key=f"mapa_brasil_click_{chave}")
     except TypeError:
         # Versao do Streamlit sem suporte a selecao por clique: mostra o mapa normalmente
-        st.plotly_chart(fig_mapa, use_container_width=True)
+        st.plotly_chart(fig_mapa, use_container_width=True, key=f"mapa_brasil_static_{chave}")
         evento = None
 
     try:
@@ -1037,11 +1031,14 @@ def renderizar_mapa():
         with col_txt:
             st.caption(f"Mostrando somente: {', '.join(estados_sel)}. Clique em outro estado para trocar, ou limpe o filtro 'Estado' acima para ver todos.")
         with col_btn:
-            if st.button("Ver todos os estados", use_container_width=True):
+            if st.button("Ver todos os estados", use_container_width=True, key=f"btn_ver_todos_{chave}"):
                 st.session_state["estados_sel_mapa"] = []
                 st.rerun()
     else:
         st.caption("Clique em um estado do mapa para ver somente os dados dele. Estados sem dados aparecem escurecidos.")
+
+def renderizar_mapa():
+    renderizar_mapa_interativo(chave="pagina_mapa", mostrar_titulo=True)
 
 def renderizar_rodape():
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
