@@ -204,7 +204,7 @@ def fmt_kg(valor):
 def fmt_int(valor):
     return f"{valor:,}".replace(",", ".")
 
-def tabela_html(df):
+def tabela_html(df, max_height=480):
     cols = df.columns.tolist()
     header = "".join(f'<th>{c}</th>' for c in cols)
     rows = ""
@@ -212,8 +212,9 @@ def tabela_html(df):
         cells = "".join(f'<td>{row[c]}</td>' for c in cols)
         rows += f"<tr>{cells}</tr>"
     uid = f"tbl_{abs(hash(str(df.columns.tolist())))}"
+    altura_css = f"max-height:{max_height}px;overflow-y:auto;" if max_height else ""
     html = f"""
-    <div id="{uid}" style="overflow-x:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.12);max-height:480px;overflow-y:auto;">
+    <div id="{uid}" style="overflow-x:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.12);{altura_css}">
     <table style="width:100%;border-collapse:collapse;font-family:'Nunito',sans-serif;font-size:13px;min-width:600px;">
         <thead style="position:sticky;top:0;z-index:2;">
             <tr style="background:rgba(20,20,20,0.97);border-bottom:2px solid rgba(255,180,0,0.4);">{header}</tr>
@@ -341,30 +342,7 @@ def mostrar_kpis_globais():
 with tab1:
     mostrar_kpis_globais()
     st.subheader("Resumo por Municipio")
-    col_tabela, col_grafico = st.columns([1.2, 1])
-
-    with col_tabela:
-        st.markdown(tabela_html(resumo_por_cidade(df_filtrado)), unsafe_allow_html=True)
-
-    with col_grafico:
-        if "CIDADE" in df_filtrado.columns and not df_filtrado.empty:
-            dados_grafico = df_filtrado.groupby("CIDADE")["VLTOTAL"].sum().sort_values(ascending=False).head(10).reset_index()
-            dados_grafico["VLTOTAL_FMT"] = dados_grafico["VLTOTAL"].apply(fmt_brl)
-            fig = px.bar(
-                dados_grafico, x="VLTOTAL", y="CIDADE", orientation="h",
-                title="Top 10 Cidades por Valor", color="VLTOTAL",
-                color_continuous_scale=["#b35c00", "#ffb400", "#ffe066"],
-                custom_data=["VLTOTAL_FMT"],
-            )
-            fig.update_traces(marker_line_width=0, hovertemplate="<b>%{y}</b><br>Valor: %{customdata[0]}<extra></extra>")
-            fig.update_layout(
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                font_color="white", title_font_size=15, coloraxis_showscale=False,
-                margin=dict(l=0, r=10, t=40, b=10),
-                yaxis=dict(autorange="reversed", title=""),
-                xaxis=dict(title="", tickprefix="R$ ", separatethousands=True),
-            )
-            st.plotly_chart(fig, use_container_width=True)
+    st.markdown(tabela_html(resumo_por_cidade(df_filtrado), max_height=None), unsafe_allow_html=True)
 
 # ---------- ABA 2: POR SUPERVISOR ----------
 with tab2:
