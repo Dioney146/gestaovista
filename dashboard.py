@@ -1070,6 +1070,69 @@ def renderizar_detalhes():
     st.caption(f"{fmt_int(len(df_exib))} pedidos encontrados")
     st.markdown(tabela_premium_html(formatar_tabela(df_exib), coluna_barra=None), unsafe_allow_html=True)
 
+def tabela_comparativo_municipio(df_montados, df_liberados):
+    """Monta uma tabela premium comparando Montados x Liberados (Pedidos/Valor/Peso) por municipio."""
+    def resumo(df):
+        if df.empty or "CIDADE" not in df.columns or "NUMPED" not in df.columns:
+            return pd.DataFrame(columns=["Pedidos", "Valor", "Peso"])
+        return df.groupby("CIDADE").agg(
+            Pedidos=("NUMPED", "count"), Valor=("VLTOTAL", "sum"), Peso=("PESOBRUTOTOT", "sum")
+        )
+
+    r_mont = resumo(df_montados)
+    r_lib  = resumo(df_liberados)
+
+    cidades = sorted(set(r_mont.index) | set(r_lib.index))
+    if not cidades:
+        return None
+
+    def valor_total(c):
+        v = 0.0
+        if c in r_mont.index: v += r_mont.loc[c, "Valor"]
+        if c in r_lib.index:  v += r_lib.loc[c, "Valor"]
+        return v
+
+    cidades_ordenadas = sorted(cidades, key=valor_total, reverse=True)
+
+    tot_mp = tot_mv = tot_mw = tot_lp = tot_lv = tot_lw = 0
+    linhas = ""
+    for c in cidades_ordenadas:
+        mp = int(r_mont.loc[c, "Pedidos"]) if c in r_mont.index else 0
+        mv = float(r_mont.loc[c, "Valor"]) if c in r_mont.index else 0.0
+        mw = float(r_mont.loc[c, "Peso"])  if c in r_mont.index else 0.0
+        lp = int(r_lib.loc[c, "Pedidos"])  if c in r_lib.index else 0
+        lv = float(r_lib.loc[c, "Valor"])  if c in r_lib.index else 0.0
+        lw = float(r_lib.loc[c, "Peso"])   if c in r_lib.index else 0.0
+
+        tot_mp += mp; tot_mv += mv; tot_mw += mw
+        tot_lp += lp; tot_lv += lv; tot_lw += lw
+
+        linhas += (
+            f"<tr><td>{c}</td>"
+            f"<td>{fmt_int(mp)}</td><td>{fmt_brl(mv)}</td><td>{fmt_kg(mw)}</td>"
+            f"<td>{fmt_int(lp)}</td><td>{fmt_brl(lv)}</td><td>{fmt_kg(lw)}</td></tr>"
+        )
+
+    linha_total = (
+        f"<tr class='linha-total'><td>Total Geral</td>"
+        f"<td>{fmt_int(tot_mp)}</td><td>{fmt_brl(tot_mv)}</td><td>{fmt_kg(tot_mw)}</td>"
+        f"<td>{fmt_int(tot_lp)}</td><td>{fmt_brl(tot_lv)}</td><td>{fmt_kg(tot_lw)}</td></tr>"
+    )
+
+    header = (
+        "<tr><th rowspan='2'>Municipio</th>"
+        "<th colspan='3' style='text-align:center;background:rgba(245,158,11,0.16);'>MONTADOS</th>"
+        "<th colspan='3' style='text-align:center;background:rgba(239,68,68,0.16);'>LIBERADOS</th></tr>"
+        "<tr><th>Pedidos</th><th>Valor</th><th>Peso</th><th>Pedidos</th><th>Valor</th><th>Peso</th></tr>"
+    )
+
+    uid = f"tblcmp_{abs(hash(str(cidades_ordenadas) + str(tot_mv)))}"
+    return (
+        f'<div class="tabela-premium-wrap" style="max-height:420px;overflow-y:auto;">'
+        f'<table class="tabela-premium" id="{uid}"><thead>{header}</thead>'
+        f'<tbody>{linhas}{linha_total}</tbody></table></div>'
+    )
+
 def calcular_pendentes_montados(df_montados, df_liberados):
     """Compara Montados x Liberados (por ESTADO + NUMPED) e devolve os pedidos
     que foram montados mas ainda nao aparecem como liberados (ficaram para tras)."""
@@ -1117,46 +1180,15 @@ def renderizar_montados():
 
     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-    col_graf, col_tab = st.columns([1, 1.3])
+    st.markdown('<div class="painel">', unsafe_allow_html=True)
+    st.markdown('<p class="painel-titulo"><span class="ic">🏙️</span>Montados x Liberados por Municipio</p>', unsafe_allow_html=True)
 
-    with col_graf:
-        st.markdown('<div class="painel">', unsafe_allow_html=True)
-        st.markdown('<p class="painel-titulo"><span class="ic">📊</span>Montados x Pendentes por Estado</p>', unsafe_allow_html=True)
-        if "ESTADO" in df_montados_filtrado.columns and not df_montados_filtrado.empty:
-            montados_por_estado = df_montados_filtrado.groupby("ESTADO")["NUMPED"].count().rename("Montados")
-            pendentes_por_estado = df_pendentes.groupby("ESTADO")["NUMPED"].count().rename("Pendentes") if not df_pendentes.empty else pd.Series(dtype=int, name="Pendentes")
-            comparativo = pd.concat([montados_por_estado, pendentes_por_estado], axis=1).fillna(0).reset_index()
-
-            fig_comp = go.Figure()
-            fig_comp.add_bar(name="Montados", x=comparativo["ESTADO"], y=comparativo["Montados"], marker_color="#F59E0B")
-            fig_comp.add_bar(name="Ficaram para tras", x=comparativo["ESTADO"], y=comparativo["Pendentes"], marker_color="#ef4444")
-            fig_comp.update_layout(barmode="group", height=340, legend=dict(orientation="h", y=1.15))
-            aplicar_tema_grafico(fig_comp)
-            st.plotly_chart(fig_comp, use_container_width=True)
-        else:
-            st.info("Sem dados suficientes para comparar por estado.")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with col_tab:
-        st.markdown('<div class="painel">', unsafe_allow_html=True)
-        st.markdown('<p class="painel-titulo"><span class="ic">⏳</span>Pedidos Montados que Ficaram para Tras</p>', unsafe_allow_html=True)
-
-        if df_pendentes.empty:
-            st.success("Nenhum pedido montado ficou para tras — tudo liberado! 🎉")
-        else:
-            colunas_pend = [c for c in ["NUMPED", "ESTADO", "NOMECLIENTE", "CIDADE", "NOMESUP", "VLTOTAL", "PESOBRUTOTOT", "DATA"] if c in df_pendentes.columns]
-            df_pend_exib = df_pendentes[colunas_pend].copy()
-            if "VLTOTAL" in df_pend_exib.columns:
-                df_pend_exib = df_pend_exib.sort_values("VLTOTAL", ascending=False)
-
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                formatar_tabela(df_pend_exib).to_excel(writer, index=False, sheet_name="Pendentes")
-            st.download_button("⬇️ Exportar pendentes", data=buffer.getvalue(), file_name="montados_pendentes.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-            st.markdown(tabela_premium_html(formatar_tabela(df_pend_exib), max_height=340), unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+    tabela_cmp = tabela_comparativo_municipio(df_montados_filtrado, df_filtrado)
+    if tabela_cmp is None:
+        st.info("Sem dados suficientes para montar a comparacao por municipio.")
+    else:
+        st.markdown(tabela_cmp, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 def renderizar_mapa_interativo(chave, mostrar_titulo=True, altura=480):
     if mostrar_titulo:
