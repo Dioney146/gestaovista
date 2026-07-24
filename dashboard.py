@@ -16,6 +16,7 @@ st.set_page_config(
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Nunito:wght@300;400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,400,0,0&display=block');
 
 @media (prefers-color-scheme: dark) {
     :root { --bg-overlay: rgba(0,0,0,0.82); --text: white; --text-muted: rgba(255,255,255,0.55); --border: rgba(255,255,255,0.15); --input-bg: rgba(30,30,30,0.95); --input-border: rgba(255,255,255,0.25); --input-text: white; --menu-bg: #1a1a1a; --kpi-bg: rgba(255,255,255,0.07); --kpi-border: rgba(255,255,255,0.15); --tab-color: rgba(255,255,255,0.6); --tab-sel: white; --df-bg: rgba(255,255,255,0.04); --df-border: rgba(255,255,255,0.12); --cell-color: rgba(255,255,255,0.88); --hr: rgba(255,255,255,0.1); --caption: rgba(255,255,255,0.5); --alert-bg: rgba(30,30,30,0.9); --header-border: rgba(255,255,255,0.15); }
@@ -33,9 +34,26 @@ footer {visibility: hidden;}
 [data-testid="stAppViewContainer"] { background-color: var(--bg-overlay) !important; }
 [data-testid="stMain"], [data-testid="stMainBlockContainer"], .main, .main > div { background-color: transparent !important; }
 h1, h2, h3, h4, h5, h6, p, label, div, span, li, a, [class*="st-"], [data-testid] { color: var(--text) !important; font-family: 'Nunito', sans-serif !important; }
-[data-testid="stIconMaterial"], .material-symbols-outlined, .material-icons, span[class*="material-symbols"] { font-family: 'Material Symbols Outlined' !important; line-height: 1 !important; }
-[data-testid="stExpander"] summary { display: flex !important; align-items: center !important; gap: 8px !important; }
+[data-testid="stIconMaterial"], .material-symbols-outlined, .material-icons, span[class*="material-symbols"] {
+    font-family: 'Material Symbols Outlined' !important;
+    line-height: 1 !important;
+    display: inline-block !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+}
+[data-testid="stExpanderIconToggle"] [data-testid="stIconMaterial"],
+[data-testid="stExpander"] summary [data-testid="stIconMaterial"] {
+    max-width: 22px !important;
+    font-size: 22px !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] [data-testid="stIconMaterial"] {
+    max-width: 28px !important;
+    font-size: 28px !important;
+}
+[data-testid="stExpander"] summary { display: flex !important; align-items: center !important; gap: 8px !important; flex-wrap: nowrap !important; }
 [data-testid="stExpander"] summary span { position: static !important; }
+[data-testid="stExpander"] summary [data-testid="stMarkdownContainer"] { overflow: visible !important; white-space: normal !important; }
 [data-testid="stFileUploaderDropzone"] { flex-wrap: wrap !important; }
 input, textarea, select { background-color: var(--input-bg) !important; border: 1px solid var(--input-border) !important; border-radius: 8px !important; color: var(--input-text) !important; -webkit-text-fill-color: var(--input-text) !important; }
 [data-testid="stSelectbox"] > div > div, [data-baseweb="select"] > div { background-color: var(--input-bg) !important; border: 1px solid var(--input-border) !important; border-radius: 8px !important; color: var(--input-text) !important; }
