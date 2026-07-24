@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import pandas as pd
-import numpy as np
+import math
 import streamlit as st
 import os
 import io
@@ -366,7 +366,11 @@ with tab1:
             n_colunas = 4
 
         # Divide o dataframe em blocos sequenciais (estilo "colunas de jornal")
-        blocos = np.array_split(resumo_mun, n_colunas)
+        tamanho_bloco = math.ceil(total_mun / n_colunas)
+        blocos = [
+            resumo_mun.iloc[i:i + tamanho_bloco]
+            for i in range(0, total_mun, tamanho_bloco)
+        ]
         colunas_st = st.columns(n_colunas)
 
         for coluna_st, bloco in zip(colunas_st, blocos):
