@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import pandas as pd
+import numpy as np
 import streamlit as st
 import os
 import io
@@ -204,18 +205,22 @@ def fmt_kg(valor):
 def fmt_int(valor):
     return f"{valor:,}".replace(",", ".")
 
-def tabela_html(df, max_height=480):
+def tabela_html(df, max_height=480, compact=False):
     cols = df.columns.tolist()
     header = "".join(f'<th>{c}</th>' for c in cols)
     rows = ""
     for _, row in df.iterrows():
         cells = "".join(f'<td>{row[c]}</td>' for c in cols)
         rows += f"<tr>{cells}</tr>"
-    uid = f"tbl_{abs(hash(str(df.columns.tolist())))}"
+    uid = f"tbl_{abs(hash(str(df.columns.tolist()) + str(len(df)) + str(compact)))}"
     altura_css = f"max-height:{max_height}px;overflow-y:auto;" if max_height else ""
+    pad_th = "6px 10px" if compact else "11px 16px"
+    pad_td = "5px 10px" if compact else "9px 16px"
+    font_th = "10px" if compact else "11px"
+    font_td = "12px" if compact else "13px"
     html = f"""
     <div id="{uid}" style="overflow-x:auto;border-radius:10px;border:1px solid rgba(255,255,255,0.12);{altura_css}">
-    <table style="width:100%;border-collapse:collapse;font-family:'Nunito',sans-serif;font-size:13px;min-width:600px;">
+    <table style="width:100%;border-collapse:collapse;font-family:'Nunito',sans-serif;font-size:{font_td};min-width:{'260px' if compact else '600px'};">
         <thead style="position:sticky;top:0;z-index:2;">
             <tr style="background:rgba(20,20,20,0.97);border-bottom:2px solid rgba(255,180,0,0.4);">{header}</tr>
         </thead>
@@ -223,8 +228,8 @@ def tabela_html(df, max_height=480):
     </table>
     </div>
     <style>
-    #{uid} th {{ padding:11px 16px;text-align:left;color:rgba(255,210,80,1);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;white-space:nowrap; }}
-    #{uid} td {{ padding:9px 16px;color:rgba(255,255,255,0.88);border-bottom:1px solid rgba(255,255,255,0.05);white-space:nowrap; }}
+    #{uid} th {{ padding:{pad_th};text-align:left;color:rgba(255,210,80,1);font-weight:700;font-size:{font_th};text-transform:uppercase;letter-spacing:0.8px;white-space:nowrap; }}
+    #{uid} td {{ padding:{pad_td};color:rgba(255,255,255,0.88);border-bottom:1px solid rgba(255,255,255,0.05);white-space:nowrap; }}
     #{uid} tbody tr:hover td {{ background:rgba(255,180,0,0.08); }}
     #{uid}::-webkit-scrollbar {{ height:7px;width:7px; }}
     #{uid}::-webkit-scrollbar-track {{ background:rgba(255,255,255,0.05);border-radius:10px; }}
@@ -342,7 +347,34 @@ def mostrar_kpis_globais():
 with tab1:
     mostrar_kpis_globais()
     st.subheader("Resumo por Municipio")
-    st.markdown(tabela_html(resumo_por_cidade(df_filtrado), max_height=None), unsafe_allow_html=True)
+
+    resumo_mun = resumo_por_cidade(df_filtrado)
+    total_mun  = len(resumo_mun)
+
+    if total_mun == 0:
+        st.info("Nenhum dado disponivel.")
+    else:
+        # Define quantas colunas usar conforme a quantidade de municipios,
+        # para que todos caibam na tela sem precisar rolar.
+        if total_mun <= 15:
+            n_colunas = 1
+        elif total_mun <= 40:
+            n_colunas = 2
+        elif total_mun <= 70:
+            n_colunas = 3
+        else:
+            n_colunas = 4
+
+        # Divide o dataframe em blocos sequenciais (estilo "colunas de jornal")
+        blocos = np.array_split(resumo_mun, n_colunas)
+        colunas_st = st.columns(n_colunas)
+
+        for coluna_st, bloco in zip(colunas_st, blocos):
+            with coluna_st:
+                st.markdown(
+                    tabela_html(bloco.reset_index(drop=True), max_height=None, compact=(n_colunas > 1)),
+                    unsafe_allow_html=True
+                )
 
 # ---------- ABA 2: POR SUPERVISOR ----------
 with tab2:
