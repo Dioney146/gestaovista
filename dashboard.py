@@ -2,16 +2,8 @@
 import pandas as pd
 import streamlit as st
 import io
-import time
-from urllib.parse import quote
 import plotly.express as px
 import plotly.graph_objects as go
-
-try:
-    from streamlit_autorefresh import st_autorefresh
-    AUTOREFRESH_DISPONIVEL = True
-except ImportError:
-    AUTOREFRESH_DISPONIVEL = False
 
 st.set_page_config(
     layout="wide",
@@ -79,31 +71,16 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==================================================
-# AUTO-REFRESH (atualiza a tela sozinha periodicamente)
+# CONFIGURACAO DOS ESTADOS
 # ==================================================
-INTERVALO_ATUALIZACAO_SEGUNDOS = 60
-
-if AUTOREFRESH_DISPONIVEL:
-    st_autorefresh(interval=INTERVALO_ATUALIZACAO_SEGUNDOS * 1000, key="auto_refresh_dados")
-
-# ==================================================
-# CONFIGURACAO GOOGLE SHEETS
-# ==================================================
-SHEET_ID = "1Ad8UDGM_2z_co312CC3S-XYo_EIKfNljVwB-ZY8kphY"
-
-# Mapeia a sigla do estado exibida no app -> nome exato da aba na planilha Google
-ESTADOS = {
-    "AM":    "LIBERADOS_AM",
-    "BA":    "LIBERADOS_BA",
-    "DF":    "LIBERADOS_D.F",
-    "MG.ES": "LIBERADOS_MG.ES",
-    "SP":    "LIBERADOS_SP",
-    "SPW":   "LIBERADOS_SP (WFS)",
+ESTADOS_LABELS = {
+    "AM":    "Amazonas (AM)",
+    "BA":    "Bahia (BA)",
+    "DF":    "Distrito Federal (DF)",
+    "MG.ES": "Minas Gerais / Espirito Santo (MG.ES)",
+    "SP":    "Sao Paulo (SP)",
+    "SPW":   "Sao Paulo WFS (SPW)",
 }
-
-def montar_url_aba(nome_aba):
-    """Monta a URL de exportacao CSV de uma aba especifica do Google Sheets."""
-    return f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={quote(nome_aba)}"
 
 def parse_numero_brl(valor):
     """Converte valores numericos vindos da planilha (formato BR ou US) para float."""
@@ -165,48 +142,79 @@ def tratar_dataframe(df):
 
     return df
 
-@st.cache_data(ttl=INTERVALO_ATUALIZACAO_SEGUNDOS, show_spinner=False)
-def carregar_todos_estados():
-    """Baixa e junta os dados de todas as abas/estados da planilha Google."""
-    frames = []
-    erros = []
-
-    for sigla, nome_aba in ESTADOS.items():
-        try:
-            url = montar_url_aba(nome_aba)
-            df_estado = pd.read_csv(url)
-            if df_estado is None or df_estado.empty:
-                continue
-            df_estado = tratar_dataframe(df_estado)
-            df_estado["ESTADO"] = sigla
-            frames.append(df_estado)
-        except Exception as e:
-            erros.append(f"{sigla} ({nome_aba}): {e}")
-
-    if frames:
-        df_total = pd.concat(frames, ignore_index=True)
+def ler_arquivo_upload(arquivo):
+    """Le um arquivo enviado pelo usuario (.xlsx, .xls ou .csv) para um DataFrame."""
+    nome = arquivo.name.lower()
+    if nome.endswith(".csv"):
+        return pd.read_csv(arquivo)
+    elif nome.endswith(".xls"):
+        return pd.read_excel(arquivo, engine="xlrd")
     else:
-        df_total = pd.DataFrame()
-
-    return df_total, erros
-
-df, erros_carregamento = carregar_todos_estados()
-
-if df.empty:
-    st.error("Nao foi possivel carregar dados de nenhum estado a partir do Google Sheets. "
-              "Verifique se a planilha esta compartilhada como 'Qualquer pessoa com o link - Leitor'.")
-    if erros_carregamento:
-        with st.expander("Detalhes dos erros"):
-            for e in erros_carregamento:
-                st.write(e)
-    st.stop()
-
-if erros_carregamento:
-    with st.expander(f"⚠️ {len(erros_carregamento)} estado(s) nao carregaram corretamente"):
-        for e in erros_carregamento:
-            st.write(e)
+        return pd.read_excel(arquivo, engine="openpyxl")
 
 # ==================================================
+# IMPORTACAO DE DADOS (upload manual, direto no site)
+# ==================================================
+st.markdown('<p class="filter-title">Importar Dados</p>', unsafe_allow_html=True)
+
+with st.expander("📥 Importar planilhas por estado", expanded=("dados_carregados" not in st.session_state)):
+    st.caption("Envie o arquivo (.xlsx, .xls ou .csv) de cada estado que quiser incluir. Nao precisa enviar todos de uma vez.")
+
+    cols_upload = st.columns(3)
+    arquivos_upload = {}
+    for i, (sigla, label) in enumerate(ESTADOS_LABELS.items()):
+        with cols_upload[i % 3]:
+            arquivos_upload[sigla] = st.file_uploader(label, type=["xlsx", "xls", "csv"], key=f"upload_{sigla}")
+
+    col_btn1, col_btn2 = st.columns([1, 1])
+    with col_btn1:
+        processar = st.button("📊 Processar dados importados", type="primary", use_container_width=True)
+    with col_btn2:
+        limpar = st.button("🗑️ Limpar dados carregados", use_container_width=True)
+
+    if limpar:
+        st.session_state.pop("dados_carregados", None)
+        st.session_state.pop("erros_importacao", None)
+        st.rerun()
+
+    if processar:
+        frames = []
+        erros = []
+        for sigla, arquivo in arquivos_upload.items():
+            if arquivo is not None:
+                try:
+                    df_estado = ler_arquivo_upload(arquivo)
+                    df_estado = tratar_dataframe(df_estado)
+                    df_estado["ESTADO"] = sigla
+                    frames.append(df_estado)
+                except Exception as e:
+                    erros.append(f"{sigla}: {e}")
+
+        st.session_state["erros_importacao"] = erros
+
+        if frames:
+            st.session_state["dados_carregados"] = pd.concat(frames, ignore_index=True)
+            st.success(f"Dados importados com sucesso! ({len(frames)} estado(s) processado(s))")
+        elif not erros:
+            st.warning("Nenhum arquivo foi enviado. Selecione ao menos um arquivo e clique em processar novamente.")
+
+if st.session_state.get("erros_importacao"):
+    with st.expander(f"⚠️ {len(st.session_state['erros_importacao'])} erro(s) na importacao"):
+        for e in st.session_state["erros_importacao"]:
+            st.write(e)
+
+if "dados_carregados" not in st.session_state:
+    st.info("Faca upload das planilhas de pelo menos um estado acima e clique em 'Processar dados importados' para comecar.")
+    st.stop()
+
+df = st.session_state["dados_carregados"]
+
+if df.empty:
+    st.warning("Os arquivos importados nao geraram nenhum pedido valido. Confira os arquivos e tente novamente.")
+    st.stop()
+
+# ==================================================
+
 # FUNCOES AUXILIARES
 # ==================================================
 def fmt_brl(valor):
@@ -281,15 +289,10 @@ def resumo_por_estado(df):
     return resumo
 
 # ==================================================
-# BARRA DE STATUS / ATUALIZACAO
+# STATUS DOS DADOS IMPORTADOS
 # ==================================================
-col_status, col_botao = st.columns([5, 1])
-with col_status:
-    st.caption(f"Dados de {len(ESTADOS)} estados • Atualiza automaticamente a cada {INTERVALO_ATUALIZACAO_SEGUNDOS}s • Ultima leitura: {time.strftime('%d/%m/%Y %H:%M:%S')}")
-with col_botao:
-    if st.button("🔄 Atualizar agora"):
-        st.cache_data.clear()
-        st.rerun()
+estados_carregados = sorted(df["ESTADO"].unique().tolist()) if "ESTADO" in df.columns else []
+st.caption(f"Dados importados de {len(estados_carregados)} estado(s): {', '.join(estados_carregados)} • {fmt_int(len(df))} pedidos no total")
 
 # ==================================================
 # FILTROS GLOBAIS
@@ -299,7 +302,7 @@ st.markdown('<p class="filter-title">Filtros</p>', unsafe_allow_html=True)
 col_f0, col_f1, col_f2, col_f3, col_f4 = st.columns([1.3, 2, 2, 1, 1])
 
 with col_f0:
-    estados_disp = list(ESTADOS.keys())
+    estados_disp = estados_carregados
     estados_sel  = st.multiselect("Filtrar por Estado", options=estados_disp, placeholder="Todos os estados")
 
 with col_f1:
