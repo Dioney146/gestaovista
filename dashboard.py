@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import pandas as pd
-import math
 import streamlit as st
 import os
 import io
@@ -347,38 +346,30 @@ def mostrar_kpis_globais():
 with tab1:
     mostrar_kpis_globais()
     st.subheader("Resumo por Municipio")
+    col_tabela, col_grafico = st.columns([1.2, 1])
 
-    resumo_mun = resumo_por_cidade(df_filtrado)
-    total_mun  = len(resumo_mun)
+    with col_tabela:
+        st.markdown(tabela_html(resumo_por_cidade(df_filtrado)), unsafe_allow_html=True)
 
-    if total_mun == 0:
-        st.info("Nenhum dado disponivel.")
-    else:
-        # Define quantas colunas usar conforme a quantidade de municipios,
-        # para que todos caibam na tela sem precisar rolar.
-        if total_mun <= 15:
-            n_colunas = 1
-        elif total_mun <= 40:
-            n_colunas = 2
-        elif total_mun <= 70:
-            n_colunas = 3
-        else:
-            n_colunas = 4
-
-        # Divide o dataframe em blocos sequenciais (estilo "colunas de jornal")
-        tamanho_bloco = math.ceil(total_mun / n_colunas)
-        blocos = [
-            resumo_mun.iloc[i:i + tamanho_bloco]
-            for i in range(0, total_mun, tamanho_bloco)
-        ]
-        colunas_st = st.columns(n_colunas)
-
-        for coluna_st, bloco in zip(colunas_st, blocos):
-            with coluna_st:
-                st.markdown(
-                    tabela_html(bloco.reset_index(drop=True), max_height=None, compact=(n_colunas > 1)),
-                    unsafe_allow_html=True
-                )
+    with col_grafico:
+        if "CIDADE" in df_filtrado.columns and not df_filtrado.empty:
+            dados_grafico = df_filtrado.groupby("CIDADE")["VLTOTAL"].sum().sort_values(ascending=False).head(10).reset_index()
+            dados_grafico["VLTOTAL_FMT"] = dados_grafico["VLTOTAL"].apply(fmt_brl)
+            fig = px.bar(
+                dados_grafico, x="VLTOTAL", y="CIDADE", orientation="h",
+                title="Top 10 Cidades por Valor", color="VLTOTAL",
+                color_continuous_scale=["#b35c00", "#ffb400", "#ffe066"],
+                custom_data=["VLTOTAL_FMT"],
+            )
+            fig.update_traces(marker_line_width=0, hovertemplate="<b>%{y}</b><br>Valor: %{customdata[0]}<extra></extra>")
+            fig.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                font_color="white", title_font_size=15, coloraxis_showscale=False,
+                margin=dict(l=0, r=10, t=40, b=10),
+                yaxis=dict(autorange="reversed", title=""),
+                xaxis=dict(title="", tickprefix="R$ ", separatethousands=True),
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 # ---------- ABA 2: POR SUPERVISOR ----------
 with tab2:
