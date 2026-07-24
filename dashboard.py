@@ -298,7 +298,6 @@ MAPA_UF_PARA_ESTADO = {
     "BA": ["BA"],
     "DF": ["DF"],
     "MG": ["MG.ES"],
-    "ES": ["MG.ES"],
     "SP": ["SP", "SPW"],
 }
 
@@ -966,15 +965,25 @@ def renderizar_mapa():
     valor_por_estado_sistema = df_filtrado.groupby("ESTADO")["VLTOTAL"].sum().to_dict() if "ESTADO" in df_filtrado.columns else {}
     pedidos_por_estado_sistema = df_filtrado.groupby("ESTADO")["NUMPED"].count().to_dict() if "ESTADO" in df_filtrado.columns else {}
 
+    # UFs do mapa cujo estado do sistema esta atualmente selecionado no filtro
+    ufs_selecionadas = [
+        uf for uf, siglas in MAPA_UF_PARA_ESTADO.items()
+        if estados_sel and set(siglas) & set(estados_sel)
+    ]
+
     linhas_mapa = []
     for feat in geo["features"]:
         sigla_uf = feat["properties"].get("sigla")
         siglas_sistema = MAPA_UF_PARA_ESTADO.get(sigla_uf, [])
         valor = sum(valor_por_estado_sistema.get(s, 0) for s in siglas_sistema)
         pedidos = sum(pedidos_por_estado_sistema.get(s, 0) for s in siglas_sistema)
-        linhas_mapa.append({"UF": sigla_uf, "Valor": valor, "Pedidos": pedidos, "TemDados": valor > 0})
+        linhas_mapa.append({
+            "UF": sigla_uf, "Valor": valor, "Pedidos": pedidos,
+            "TemDados": siglas_sistema != [], "Selecionado": sigla_uf in ufs_selecionadas,
+        })
 
     df_mapa = pd.DataFrame(linhas_mapa)
+    tem_selecao = len(ufs_selecionadas) > 0
 
     fig_mapa = px.choropleth(
         df_mapa, geojson=geo, locations="UF", featureidkey="properties.sigla",
@@ -984,8 +993,22 @@ def renderizar_mapa():
     )
     fig_mapa.update_traces(
         marker_line_color="rgba(255,255,255,0.15)", marker_line_width=1,
+        marker_opacity=0.45 if tem_selecao else 1.0,
         hovertemplate="<b>%{location}</b><br>Valor: R$ %{z:,.2f}<br>Pedidos: %{customdata[0]}<extra></extra>",
     )
+
+    # Camada extra: ilumina em laranja os estados atualmente selecionados no filtro
+    if tem_selecao:
+        df_sel = df_mapa[df_mapa["Selecionado"]]
+        fig_destaque = go.Choropleth(
+            geojson=geo, locations=df_sel["UF"], z=[1] * len(df_sel), featureidkey="properties.sigla",
+            colorscale=[[0, "#F59E0B"], [1, "#F59E0B"]], showscale=False,
+            marker_line_color="#FDBA74", marker_line_width=3, marker_opacity=0.95,
+            customdata=df_sel[["Pedidos"]].values,
+            hovertemplate="<b>%{location}</b> (selecionado)<br>Pedidos: %{customdata[0]}<extra></extra>",
+        )
+        fig_mapa.add_trace(fig_destaque)
+
     fig_mapa.update_geos(fitbounds="locations", visible=False, bgcolor="rgba(0,0,0,0)")
     fig_mapa.update_layout(coloraxis_showscale=True, coloraxis_colorbar=dict(title="Valor (R$)", tickfont=dict(color="#B8C0CC")), height=520)
     aplicar_tema_grafico(fig_mapa)
@@ -1005,11 +1028,20 @@ def renderizar_mapa():
     if pontos:
         uf_clicada = pontos[0].get("location")
         siglas_sistema = MAPA_UF_PARA_ESTADO.get(uf_clicada, [])
-        if siglas_sistema:
+        if siglas_sistema and st.session_state.get("estados_sel_mapa") != siglas_sistema:
             st.session_state["estados_sel_mapa"] = siglas_sistema
-            st.info(f"Estado selecionado no mapa: {uf_clicada} → filtro aplicado para {', '.join(siglas_sistema)}. Ajuste em 'Filtros' se quiser.")
+            st.rerun()
 
-    st.caption("Clique em um estado do mapa para pre-selecionar o filtro de Estado acima. Estados sem dados aparecem escurecidos.")
+    if tem_selecao:
+        col_txt, col_btn = st.columns([4, 1])
+        with col_txt:
+            st.caption(f"Mostrando somente: {', '.join(estados_sel)}. Clique em outro estado para trocar, ou limpe o filtro 'Estado' acima para ver todos.")
+        with col_btn:
+            if st.button("Ver todos os estados", use_container_width=True):
+                st.session_state["estados_sel_mapa"] = []
+                st.rerun()
+    else:
+        st.caption("Clique em um estado do mapa para ver somente os dados dele. Estados sem dados aparecem escurecidos.")
 
 def renderizar_rodape():
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
