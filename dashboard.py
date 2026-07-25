@@ -1072,7 +1072,7 @@ def renderizar_detalhes():
 
 def tabela_comparativo_estado(df_montados, df_liberados, df_pendentes):
     """Monta uma tabela premium comparando Montados x Liberados x Pendentes (Pedidos/Valor/Peso) por estado.
-    Pendentes = pedidos montados cujo NUMPED nao foi encontrado em Liberados do mesmo estado
+    Pendentes = pedidos LIBERADOS cujo NUMPED nao foi encontrado em Montados do mesmo estado
     (comparacao feita pedido a pedido em calcular_pendentes_montados)."""
     def resumo(df):
         if df.empty or "ESTADO" not in df.columns or "NUMPED" not in df.columns:
@@ -1145,22 +1145,25 @@ def tabela_comparativo_estado(df_montados, df_liberados, df_pendentes):
         f'<tbody>{linhas}{linha_total}</tbody></table></div>'
     )
 
-def calcular_pendentes_montados(df_montados, df_liberados):
-    """Compara Montados x Liberados (por ESTADO + NUMPED) e devolve os pedidos
-    que foram montados mas ainda nao aparecem como liberados (ficaram para tras)."""
-    if df_montados.empty or "NUMPED" not in df_montados.columns:
-        return df_montados.iloc[0:0]
+def calcular_pendentes_montados(df_liberados, df_montados):
+    """Compara Liberados x Montados (por ESTADO + NUMPED) e devolve os pedidos
+    LIBERADOS que ainda NAO aparecem como montados (ou seja, ainda nao foram montados).
 
+    Pedidos que existem apenas em Montados (sem estar em Liberados) sao desconsiderados
+    de proposito — geralmente sao pedidos encaixados apos o corte de liberados, ou cancelados."""
     if df_liberados.empty or "NUMPED" not in df_liberados.columns:
-        return df_montados.copy()
+        return df_liberados.iloc[0:0]
+
+    if df_montados.empty or "NUMPED" not in df_montados.columns:
+        return df_liberados.copy()
 
     numped_lib  = normalizar_numped(df_liberados["NUMPED"])
     numped_mont = normalizar_numped(df_montados["NUMPED"])
 
-    chave_lib = set(zip(df_liberados["ESTADO"].astype(str), numped_lib))
-    chave_mont = list(zip(df_montados["ESTADO"].astype(str), numped_mont))
-    mascara_pendente = [c not in chave_lib for c in chave_mont]
-    return df_montados[mascara_pendente].copy()
+    chave_mont = set(zip(df_montados["ESTADO"].astype(str), numped_mont))
+    chave_lib  = list(zip(df_liberados["ESTADO"].astype(str), numped_lib))
+    mascara_nao_montado = [c not in chave_mont for c in chave_lib]
+    return df_liberados[mascara_nao_montado].copy()
 
 def renderizar_montados():
     st.subheader("Montados x Liberados")
@@ -1173,12 +1176,12 @@ def renderizar_montados():
         st.markdown('</div>', unsafe_allow_html=True)
         return
 
-    df_pendentes = calcular_pendentes_montados(df_montados_filtrado, df_filtrado)
+    df_pendentes = calcular_pendentes_montados(df_filtrado, df_montados_filtrado)
 
     total_montados  = len(df_montados_filtrado)
     total_liberados = len(df_filtrado)
     total_pendentes = len(df_pendentes)
-    pct_atendido = ((total_montados - total_pendentes) / total_montados * 100) if total_montados else 0
+    pct_atendido = ((total_liberados - total_pendentes) / total_liberados * 100) if total_liberados else 0
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -1186,9 +1189,9 @@ def renderizar_montados():
     with c2:
         st.markdown(kpi_card_premium("🚚", "Total Liberados", fmt_int(total_liberados), "Pedidos liberados no periodo", []), unsafe_allow_html=True)
     with c3:
-        st.markdown(kpi_card_premium("⏳", "Ficaram para Tras", fmt_int(total_pendentes), "Montados sem liberacao ainda", [], cor="#ef4444"), unsafe_allow_html=True)
+        st.markdown(kpi_card_premium("⏳", "Ficaram para Tras", fmt_int(total_pendentes), "Liberados que ainda nao foram montados", [], cor="#ef4444"), unsafe_allow_html=True)
     with c4:
-        st.markdown(kpi_card_premium("✅", "% Atendimento", f"{pct_atendido:.1f}%", "Montados ja liberados", []), unsafe_allow_html=True)
+        st.markdown(kpi_card_premium("✅", "% Atendimento", f"{pct_atendido:.1f}%", "Liberados que ja foram montados", []), unsafe_allow_html=True)
 
     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
