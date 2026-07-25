@@ -1070,45 +1070,45 @@ def renderizar_detalhes():
     st.caption(f"{fmt_int(len(df_exib))} pedidos encontrados")
     st.markdown(tabela_premium_html(formatar_tabela(df_exib), coluna_barra=None), unsafe_allow_html=True)
 
-def tabela_comparativo_municipio(df_montados, df_liberados):
-    """Monta uma tabela premium comparando Montados x Liberados (Pedidos/Valor/Peso) por municipio."""
+def tabela_comparativo_estado(df_montados, df_liberados):
+    """Monta uma tabela premium comparando Montados x Liberados (Pedidos/Valor/Peso) por estado."""
     def resumo(df):
-        if df.empty or "CIDADE" not in df.columns or "NUMPED" not in df.columns:
+        if df.empty or "ESTADO" not in df.columns or "NUMPED" not in df.columns:
             return pd.DataFrame(columns=["Pedidos", "Valor", "Peso"])
-        return df.groupby("CIDADE").agg(
+        return df.groupby("ESTADO").agg(
             Pedidos=("NUMPED", "count"), Valor=("VLTOTAL", "sum"), Peso=("PESOBRUTOTOT", "sum")
         )
 
     r_mont = resumo(df_montados)
     r_lib  = resumo(df_liberados)
 
-    cidades = sorted(set(r_mont.index) | set(r_lib.index))
-    if not cidades:
+    estados = sorted(set(r_mont.index) | set(r_lib.index))
+    if not estados:
         return None
 
-    def valor_total(c):
+    def valor_total(e):
         v = 0.0
-        if c in r_mont.index: v += r_mont.loc[c, "Valor"]
-        if c in r_lib.index:  v += r_lib.loc[c, "Valor"]
+        if e in r_mont.index: v += r_mont.loc[e, "Valor"]
+        if e in r_lib.index:  v += r_lib.loc[e, "Valor"]
         return v
 
-    cidades_ordenadas = sorted(cidades, key=valor_total, reverse=True)
+    estados_ordenados = sorted(estados, key=valor_total, reverse=True)
 
     tot_mp = tot_mv = tot_mw = tot_lp = tot_lv = tot_lw = 0
     linhas = ""
-    for c in cidades_ordenadas:
-        mp = int(r_mont.loc[c, "Pedidos"]) if c in r_mont.index else 0
-        mv = float(r_mont.loc[c, "Valor"]) if c in r_mont.index else 0.0
-        mw = float(r_mont.loc[c, "Peso"])  if c in r_mont.index else 0.0
-        lp = int(r_lib.loc[c, "Pedidos"])  if c in r_lib.index else 0
-        lv = float(r_lib.loc[c, "Valor"])  if c in r_lib.index else 0.0
-        lw = float(r_lib.loc[c, "Peso"])   if c in r_lib.index else 0.0
+    for e in estados_ordenados:
+        mp = int(r_mont.loc[e, "Pedidos"]) if e in r_mont.index else 0
+        mv = float(r_mont.loc[e, "Valor"]) if e in r_mont.index else 0.0
+        mw = float(r_mont.loc[e, "Peso"])  if e in r_mont.index else 0.0
+        lp = int(r_lib.loc[e, "Pedidos"])  if e in r_lib.index else 0
+        lv = float(r_lib.loc[e, "Valor"])  if e in r_lib.index else 0.0
+        lw = float(r_lib.loc[e, "Peso"])   if e in r_lib.index else 0.0
 
         tot_mp += mp; tot_mv += mv; tot_mw += mw
         tot_lp += lp; tot_lv += lv; tot_lw += lw
 
         linhas += (
-            f"<tr><td>{c}</td>"
+            f"<tr><td>{e}</td>"
             f"<td>{fmt_int(mp)}</td><td>{fmt_brl(mv)}</td><td>{fmt_kg(mw)}</td>"
             f"<td>{fmt_int(lp)}</td><td>{fmt_brl(lv)}</td><td>{fmt_kg(lw)}</td></tr>"
         )
@@ -1120,13 +1120,13 @@ def tabela_comparativo_municipio(df_montados, df_liberados):
     )
 
     header = (
-        "<tr><th rowspan='2'>Municipio</th>"
+        "<tr><th rowspan='2'>Estado</th>"
         "<th colspan='3' style='text-align:center;background:rgba(245,158,11,0.16);'>MONTADOS</th>"
         "<th colspan='3' style='text-align:center;background:rgba(239,68,68,0.16);'>LIBERADOS</th></tr>"
         "<tr><th>Pedidos</th><th>Valor</th><th>Peso</th><th>Pedidos</th><th>Valor</th><th>Peso</th></tr>"
     )
 
-    uid = f"tblcmp_{abs(hash(str(cidades_ordenadas) + str(tot_mv)))}"
+    uid = f"tblcmp_{abs(hash(str(estados_ordenados) + str(tot_mv)))}"
     return (
         f'<div class="tabela-premium-wrap" style="max-height:420px;overflow-y:auto;">'
         f'<table class="tabela-premium" id="{uid}"><thead>{header}</thead>'
@@ -1181,11 +1181,11 @@ def renderizar_montados():
     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
     st.markdown('<div class="painel">', unsafe_allow_html=True)
-    st.markdown('<p class="painel-titulo"><span class="ic">🏙️</span>Montados x Liberados por Municipio</p>', unsafe_allow_html=True)
+    st.markdown('<p class="painel-titulo"><span class="ic">🌎</span>Montados x Liberados por Estado</p>', unsafe_allow_html=True)
 
-    tabela_cmp = tabela_comparativo_municipio(df_montados_filtrado, df_filtrado)
+    tabela_cmp = tabela_comparativo_estado(df_montados_filtrado, df_filtrado)
     if tabela_cmp is None:
-        st.info("Sem dados suficientes para montar a comparacao por municipio.")
+        st.info("Sem dados suficientes para montar a comparacao por estado.")
     else:
         st.markdown(tabela_cmp, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
