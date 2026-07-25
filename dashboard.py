@@ -1070,8 +1070,10 @@ def renderizar_detalhes():
     st.caption(f"{fmt_int(len(df_exib))} pedidos encontrados")
     st.markdown(tabela_premium_html(formatar_tabela(df_exib), coluna_barra=None), unsafe_allow_html=True)
 
-def tabela_comparativo_estado(df_montados, df_liberados):
-    """Monta uma tabela premium comparando Montados x Liberados (Pedidos/Valor/Peso) por estado."""
+def tabela_comparativo_estado(df_montados, df_liberados, df_pendentes):
+    """Monta uma tabela premium comparando Montados x Liberados x Pendentes (Pedidos/Valor/Peso) por estado.
+    Pendentes = pedidos montados cujo NUMPED nao foi encontrado em Liberados do mesmo estado
+    (comparacao feita pedido a pedido em calcular_pendentes_montados)."""
     def resumo(df):
         if df.empty or "ESTADO" not in df.columns or "NUMPED" not in df.columns:
             return pd.DataFrame(columns=["Pedidos", "Valor", "Peso"])
@@ -1081,8 +1083,9 @@ def tabela_comparativo_estado(df_montados, df_liberados):
 
     r_mont = resumo(df_montados)
     r_lib  = resumo(df_liberados)
+    r_pend = resumo(df_pendentes)
 
-    estados = sorted(set(r_mont.index) | set(r_lib.index))
+    estados = sorted(set(r_mont.index) | set(r_lib.index) | set(r_pend.index))
     if not estados:
         return None
 
@@ -1094,7 +1097,7 @@ def tabela_comparativo_estado(df_montados, df_liberados):
 
     estados_ordenados = sorted(estados, key=valor_total, reverse=True)
 
-    tot_mp = tot_mv = tot_mw = tot_lp = tot_lv = tot_lw = 0
+    tot_mp = tot_mv = tot_mw = tot_lp = tot_lv = tot_lw = tot_pp = tot_pv = tot_pw = 0
     linhas = ""
     for e in estados_ordenados:
         mp = int(r_mont.loc[e, "Pedidos"]) if e in r_mont.index else 0
@@ -1103,30 +1106,39 @@ def tabela_comparativo_estado(df_montados, df_liberados):
         lp = int(r_lib.loc[e, "Pedidos"])  if e in r_lib.index else 0
         lv = float(r_lib.loc[e, "Valor"])  if e in r_lib.index else 0.0
         lw = float(r_lib.loc[e, "Peso"])   if e in r_lib.index else 0.0
+        pp = int(r_pend.loc[e, "Pedidos"]) if e in r_pend.index else 0
+        pv = float(r_pend.loc[e, "Valor"]) if e in r_pend.index else 0.0
+        pw = float(r_pend.loc[e, "Peso"])  if e in r_pend.index else 0.0
 
         tot_mp += mp; tot_mv += mv; tot_mw += mw
         tot_lp += lp; tot_lv += lv; tot_lw += lw
+        tot_pp += pp; tot_pv += pv; tot_pw += pw
 
+        cor_pend = "color:#fca5a5;font-weight:700;" if pp > 0 else ""
         linhas += (
             f"<tr><td>{e}</td>"
             f"<td>{fmt_int(mp)}</td><td>{fmt_brl(mv)}</td><td>{fmt_kg(mw)}</td>"
-            f"<td>{fmt_int(lp)}</td><td>{fmt_brl(lv)}</td><td>{fmt_kg(lw)}</td></tr>"
+            f"<td>{fmt_int(lp)}</td><td>{fmt_brl(lv)}</td><td>{fmt_kg(lw)}</td>"
+            f"<td style='{cor_pend}'>{fmt_int(pp)}</td><td style='{cor_pend}'>{fmt_brl(pv)}</td><td style='{cor_pend}'>{fmt_kg(pw)}</td></tr>"
         )
 
     linha_total = (
         f"<tr class='linha-total'><td>Total Geral</td>"
         f"<td>{fmt_int(tot_mp)}</td><td>{fmt_brl(tot_mv)}</td><td>{fmt_kg(tot_mw)}</td>"
-        f"<td>{fmt_int(tot_lp)}</td><td>{fmt_brl(tot_lv)}</td><td>{fmt_kg(tot_lw)}</td></tr>"
+        f"<td>{fmt_int(tot_lp)}</td><td>{fmt_brl(tot_lv)}</td><td>{fmt_kg(tot_lw)}</td>"
+        f"<td>{fmt_int(tot_pp)}</td><td>{fmt_brl(tot_pv)}</td><td>{fmt_kg(tot_pw)}</td></tr>"
     )
 
     header = (
         "<tr><th rowspan='2'>Estado</th>"
         "<th colspan='3' style='text-align:center;background:rgba(245,158,11,0.16);'>MONTADOS</th>"
-        "<th colspan='3' style='text-align:center;background:rgba(239,68,68,0.16);'>LIBERADOS</th></tr>"
-        "<tr><th>Pedidos</th><th>Valor</th><th>Peso</th><th>Pedidos</th><th>Valor</th><th>Peso</th></tr>"
+        "<th colspan='3' style='text-align:center;background:rgba(34,197,94,0.16);'>LIBERADOS</th>"
+        "<th colspan='3' style='text-align:center;background:rgba(239,68,68,0.16);'>FICARAM PARA TRAS</th></tr>"
+        "<tr><th>Pedidos</th><th>Valor</th><th>Peso</th><th>Pedidos</th><th>Valor</th><th>Peso</th>"
+        "<th>Pedidos</th><th>Valor</th><th>Peso</th></tr>"
     )
 
-    uid = f"tblcmp_{abs(hash(str(estados_ordenados) + str(tot_mv)))}"
+    uid = f"tblcmp_{abs(hash(str(estados_ordenados) + str(tot_mv) + str(tot_pv)))}"
     return (
         f'<div class="tabela-premium-wrap" style="max-height:420px;overflow-y:auto;">'
         f'<table class="tabela-premium" id="{uid}"><thead>{header}</thead>'
@@ -1183,7 +1195,7 @@ def renderizar_montados():
     st.markdown('<div class="painel">', unsafe_allow_html=True)
     st.markdown('<p class="painel-titulo"><span class="ic">🌎</span>Montados x Liberados por Estado</p>', unsafe_allow_html=True)
 
-    tabela_cmp = tabela_comparativo_estado(df_montados_filtrado, df_filtrado)
+    tabela_cmp = tabela_comparativo_estado(df_montados_filtrado, df_filtrado, df_pendentes)
     if tabela_cmp is None:
         st.info("Sem dados suficientes para montar a comparacao por estado.")
     else:
