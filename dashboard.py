@@ -669,11 +669,26 @@ def detectar_estado_pelo_nome(nome_arquivo):
     return None
 
 def detectar_tipo_pelo_nome(nome_arquivo):
-    """Identifica se o arquivo enviado e de pedidos LIBERADOS ou MONTADOS."""
+    """Identifica se o arquivo enviado e de pedidos LIBERADOS, MONTADOS ou CARGAS."""
     nome = nome_arquivo.upper()
     if "MONTAD" in nome:
         return "MONTADOS"
     if "LIBERAD" in nome:
+        return "LIBERADOS"
+    if "CARGA" in nome or "ROTA" in nome:
+        return "CARGAS"
+    return None
+
+def detectar_tipo_pelo_conteudo(colunas):
+    """Quando o nome do arquivo nao da nenhuma pista (ex: 'AM.xlsx'), tenta
+    identificar o tipo pelas proprias colunas do arquivo — cada tipo de relatorio
+    do RoadNet usa um conjunto de colunas bem diferente."""
+    cols = {str(c).strip() for c in colunas}
+    if {"Tipos de equipamento", "Sessão de roteirização", "Número de paradas"} & cols:
+        return "CARGAS"
+    if {"Número do pedido", "Estado da Ordem", "Entrega Valor"} & cols:
+        return "MONTADOS"
+    if {"NUMPED", "VLTOTAL", "POSICAO"} & cols:
         return "LIBERADOS"
     return None
 
@@ -1048,17 +1063,24 @@ def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual):
     for arquivo in arquivos:
         try:
             estado = detectar_estado_pelo_nome(arquivo.name) or mapa_estado_manual.get(arquivo.name)
-            tipo   = detectar_tipo_pelo_nome(arquivo.name) or mapa_tipo_manual.get(arquivo.name) or "LIBERADOS"
             if estado is None:
                 erros.append(f"{arquivo.name}: nao foi possivel identificar o estado.")
                 continue
-            df_arquivo = ler_arquivo_upload(arquivo)
+
+            df_bruto = ler_arquivo_upload(arquivo)
+            tipo = (
+                detectar_tipo_pelo_nome(arquivo.name)
+                or mapa_tipo_manual.get(arquivo.name)
+                or detectar_tipo_pelo_conteudo(df_bruto.columns)
+                or "LIBERADOS"
+            )
+
             if tipo == "MONTADOS":
-                df_arquivo = tratar_dataframe_montados(df_arquivo)
+                df_arquivo = tratar_dataframe_montados(df_bruto)
             elif tipo == "CARGAS":
-                df_arquivo = tratar_dataframe_cargas(df_arquivo)
+                df_arquivo = tratar_dataframe_cargas(df_bruto)
             else:
-                df_arquivo = tratar_dataframe(df_arquivo)
+                df_arquivo = tratar_dataframe(df_bruto)
             df_arquivo["ESTADO"] = estado
             agrupados.setdefault((estado, tipo), []).append(df_arquivo)
         except Exception as e:
@@ -1101,39 +1123,27 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
         modo_importacao = "Individual (um estado por vez)"
 
     if modo_importacao.startswith("Individual"):
-        st.caption("Cada importacao vira um novo registro no historico (marcado com a data de hoje). Reimportar o mesmo estado no mesmo dia so substitui os dados de hoje — o historico de dias anteriores e de outros estados nao e afetado.")
+        st.caption("Envie junto os arquivos de Liberados, Montados e/ou Cargas desse estado — o tipo de cada arquivo e identificado automaticamente (pelo nome ou pelas colunas). Cada importacao vira um novo registro no historico (marcado com a data de hoje); reimportar o mesmo estado no mesmo dia so substitui os dados de hoje.")
         if is_admin:
-            col_estado, col_lib, col_mont = st.columns([1, 2, 2])
-            with col_estado:
-                estado_individual = st.selectbox(
-                    "Estado", list(ESTADOS_LABELS.keys()),
-                    format_func=lambda e: ESTADOS_LABELS[e], key="estado_individual_sel"
-                )
+            estado_individual = st.selectbox(
+                "Estado", list(ESTADOS_LABELS.keys()),
+                format_func=lambda e: ESTADOS_LABELS[e], key="estado_individual_sel"
+            )
         else:
             estado_individual = usuario_logado
-            col_lib, col_mont = st.columns(2)
             st.write(f"Enviando dados de: **{ESTADOS_LABELS.get(estado_individual, estado_individual)}**")
 
-        with col_lib:
-            arquivos_lib_ind = st.file_uploader(
-                f"Liberados - {estado_individual}", type=["xlsx", "xls", "csv"],
-                accept_multiple_files=True, key=f"up_lib_{estado_individual}"
-            )
-        with col_mont:
-            arquivos_mont_ind = st.file_uploader(
-                f"Montados - {estado_individual}", type=["xlsx", "xls", "csv"],
-                accept_multiple_files=True, key=f"up_mont_{estado_individual}"
-            )
+        arquivos_individual = st.file_uploader(
+            f"Liberados, Montados e Cargas - {estado_individual}", type=["xlsx", "xls", "csv"],
+            accept_multiple_files=True, key=f"up_individual_{estado_individual}"
+        )
 
         if st.button(f"Processar dados de {estado_individual}", type="primary", use_container_width=True):
-            arquivos_tag = list(arquivos_lib_ind or []) + list(arquivos_mont_ind or [])
-            if not arquivos_tag:
-                st.warning("Envie ao menos um arquivo (Liberados e/ou Montados) para processar.")
+            if not arquivos_individual:
+                st.warning("Envie ao menos um arquivo (Liberados, Montados e/ou Cargas) para processar.")
             else:
-                mapa_estado_manual = {a.name: estado_individual for a in arquivos_tag}
-                mapa_tipo_manual = {a.name: "LIBERADOS" for a in (arquivos_lib_ind or [])}
-                mapa_tipo_manual.update({a.name: "MONTADOS" for a in (arquivos_mont_ind or [])})
-                erros, resumo_ok = processar_lote(arquivos_tag, mapa_estado_manual, mapa_tipo_manual)
+                mapa_estado_manual = {a.name: estado_individual for a in arquivos_individual}
+                erros, resumo_ok = processar_lote(arquivos_individual, mapa_estado_manual, {})
                 st.session_state["erros_importacao"] = erros
                 if resumo_ok:
                     st.success("Dados de " + estado_individual + " atualizados! " + " | ".join(resumo_ok))
@@ -1143,7 +1153,7 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
 
     else:
         arquivos = st.file_uploader(
-            "Arraste os arquivos de LIBERADOS e MONTADOS de todos os estados aqui — estado e tipo sao identificados automaticamente",
+            "Arraste os arquivos de LIBERADOS, MONTADOS e CARGAS de todos os estados aqui — estado e tipo sao identificados automaticamente",
             type=["xlsx", "xls", "csv"],
             accept_multiple_files=True,
             key="up_combinado",
@@ -1154,7 +1164,18 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
 
         if arquivos:
             estado_indef = [a for a in arquivos if detectar_estado_pelo_nome(a.name) is None]
-            tipo_indef   = [a for a in arquivos if detectar_tipo_pelo_nome(a.name) is None]
+            tipo_indef = []
+            for a in arquivos:
+                if detectar_tipo_pelo_nome(a.name):
+                    continue
+                try:
+                    if detectar_tipo_pelo_conteudo(ler_arquivo_upload(a).columns):
+                        a.seek(0)
+                        continue
+                    a.seek(0)
+                except Exception:
+                    pass
+                tipo_indef.append(a)
 
             if estado_indef or tipo_indef:
                 st.caption("Nao identifiquei automaticamente alguns arquivos — confirme manualmente:")
@@ -1169,7 +1190,7 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
                     with col_tipo:
                         if precisa_tipo:
                             mapa_tipo_manual[arq.name] = st.selectbox(
-                                "Tipo", ["LIBERADOS", "MONTADOS"],
+                                "Tipo", ["LIBERADOS", "MONTADOS", "CARGAS"],
                                 key=f"tipo_{arq.name}", label_visibility="collapsed"
                             )
                     with col_est:
@@ -1192,38 +1213,6 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
                     st.rerun()
                 elif not erros:
                     st.warning("Nenhum arquivo valido foi processado.")
-
-    st.markdown("<hr style='margin:10px 0; border-color: rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
-    st.markdown('<p class="filter-title">🚛 Cargas (rotas)</p>', unsafe_allow_html=True)
-    st.caption("Relatorio de rotas/equipamentos do RoadNet (ex: AM.xlsx). Segue o mesmo historico por data de importacao.")
-
-    if is_admin:
-        estado_cargas = st.selectbox(
-            "Estado", list(ESTADOS_LABELS.keys()),
-            format_func=lambda e: ESTADOS_LABELS[e], key="estado_cargas_sel"
-        )
-    else:
-        estado_cargas = usuario_logado
-        st.write(f"Enviando cargas de: **{ESTADOS_LABELS.get(estado_cargas, estado_cargas)}**")
-
-    arquivo_cargas = st.file_uploader(
-        f"Cargas - {estado_cargas}", type=["xlsx", "xls", "csv"],
-        accept_multiple_files=True, key=f"up_cargas_{estado_cargas}"
-    )
-
-    if st.button(f"Processar cargas de {estado_cargas}", type="primary", use_container_width=True, key="btn_processar_cargas"):
-        if not arquivo_cargas:
-            st.warning("Envie ao menos um arquivo de cargas para processar.")
-        else:
-            mapa_estado_manual_c = {a.name: estado_cargas for a in arquivo_cargas}
-            mapa_tipo_manual_c = {a.name: "CARGAS" for a in arquivo_cargas}
-            erros, resumo_ok = processar_lote(arquivo_cargas, mapa_estado_manual_c, mapa_tipo_manual_c)
-            st.session_state["erros_importacao"] = erros
-            if resumo_ok:
-                st.success("Cargas de " + estado_cargas + " atualizadas! " + " | ".join(resumo_ok))
-                st.rerun()
-            elif not erros:
-                st.warning("Nenhum arquivo valido foi processado.")
 
     if is_admin:
         st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
