@@ -1634,6 +1634,85 @@ def calcular_pendentes_montados(df_liberados, df_montados):
     mascara_nao_montado = [c not in chave_mont for c in chave_lib]
     return df_liberados[mascara_nao_montado].copy()
 
+def tabela_cargas_resumo_estado(df_cargas):
+    """Tabela premium com o resumo de CARGAS por estado: quantidade de rotas,
+    quantidade de veiculos (equipamentos) usados e ocupacao (peso carregado vs
+    capacidade total), no mesmo estilo das demais tabelas com linha de Total Geral."""
+    if df_cargas.empty or "ESTADO" not in df_cargas.columns:
+        return None
+
+    resumo = df_cargas.groupby("ESTADO").agg(
+        Rotas=("IDROTA", "count"),
+        Veiculos=("PLACA", pd.Series.nunique),
+        PesoCarregado=("PESOBRUTOTOT", "sum"),
+        Capacidade=("CAPACIDADEPESO", "sum"),
+    ).reset_index().sort_values("Rotas", ascending=False)
+    resumo["Ocupacao"] = resumo.apply(
+        lambda r: (r["PesoCarregado"] / r["Capacidade"] * 100) if r["Capacidade"] else 0, axis=1
+    )
+
+    tot_rotas = int(resumo["Rotas"].sum())
+    tot_veic = int(df_cargas["PLACA"].nunique()) if "PLACA" in df_cargas.columns else 0
+    tot_peso = resumo["PesoCarregado"].sum()
+    tot_cap = resumo["Capacidade"].sum()
+    tot_ocup = (tot_peso / tot_cap * 100) if tot_cap else 0
+
+    linhas = ""
+    for _, row in resumo.iterrows():
+        linhas += (
+            f"<tr><td>{row['ESTADO']}</td><td>{fmt_int(int(row['Rotas']))}</td>"
+            f"<td>{fmt_int(int(row['Veiculos']))}</td><td>{fmt_kg(row['PesoCarregado'])}</td>"
+            f"<td>{fmt_kg(row['Capacidade'])}</td><td>{row['Ocupacao']:.1f}%</td></tr>"
+        )
+    linha_total = (
+        f"<tr class='linha-total'><td>Total Geral</td><td>{fmt_int(tot_rotas)}</td>"
+        f"<td>{fmt_int(tot_veic)}</td><td>{fmt_kg(tot_peso)}</td>"
+        f"<td>{fmt_kg(tot_cap)}</td><td>{tot_ocup:.1f}%</td></tr>"
+    )
+    header = "<tr><th>Estado</th><th>Rotas</th><th>Veiculos</th><th>Peso Carregado</th><th>Capacidade Total</th><th>Ocupacao</th></tr>"
+
+    uid = f"tblcarg_{abs(hash(str(tot_rotas) + str(tot_veic)))}"
+    return (
+        f'<div class="tabela-premium-wrap" style="max-height:360px;overflow-y:auto;">'
+        f'<table class="tabela-premium" id="{uid}"><thead>{header}</thead>'
+        f'<tbody>{linhas}{linha_total}</tbody></table></div>'
+    )
+
+def tabela_rotas_por_tipo_equipamento(df_cargas):
+    """Tabela premium com a quantidade de rotas por tipo de equipamento — uma
+    coluna por estado quando ha mais de um estado nos dados, senao uma coluna
+    unica de Total."""
+    if df_cargas.empty or "TIPOEQUIPAMENTO" not in df_cargas.columns:
+        return None
+
+    tem_varios_estados = "ESTADO" in df_cargas.columns and df_cargas["ESTADO"].nunique() > 1
+    if tem_varios_estados:
+        pivot = df_cargas.pivot_table(index="TIPOEQUIPAMENTO", columns="ESTADO", values="IDROTA", aggfunc="count", fill_value=0)
+        pivot["Total"] = pivot.sum(axis=1)
+    else:
+        pivot = df_cargas.groupby("TIPOEQUIPAMENTO").agg(Total=("IDROTA", "count"))
+    pivot = pivot.sort_values("Total", ascending=False)
+    colunas = list(pivot.columns)
+
+    header = "<tr><th>Tipo de Equipamento</th>" + "".join(f"<th>{c}</th>" for c in colunas) + "</tr>"
+    linhas = ""
+    totais = {c: 0 for c in colunas}
+    for tipo, row in pivot.iterrows():
+        cells = ""
+        for c in colunas:
+            valor = int(row[c])
+            totais[c] += valor
+            cells += f"<td>{fmt_int(valor)}</td>"
+        linhas += f"<tr><td>{tipo}</td>{cells}</tr>"
+    linha_total = "<tr class='linha-total'><td>Total Geral</td>" + "".join(f"<td>{fmt_int(totais[c])}</td>" for c in colunas) + "</tr>"
+
+    uid = f"tbltipo_{abs(hash(str(colunas) + str(totais)))}"
+    return (
+        f'<div class="tabela-premium-wrap" style="max-height:360px;overflow-y:auto;">'
+        f'<table class="tabela-premium" id="{uid}"><thead>{header}</thead>'
+        f'<tbody>{linhas}{linha_total}</tbody></table></div>'
+    )
+
 def renderizar_montados():
     st.subheader("Montados x Liberados")
 
@@ -1673,6 +1752,28 @@ def renderizar_montados():
     else:
         st.markdown(tabela_cmp, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+    col_carg1, col_carg2 = st.columns(2)
+    with col_carg1:
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        st.markdown('<p class="painel-titulo"><span class="ic">🚛</span>Cargas por Estado</p>', unsafe_allow_html=True)
+        tabela_carg = tabela_cargas_resumo_estado(df_cargas_filtrado)
+        if tabela_carg is None:
+            st.info("Nenhum arquivo de CARGAS foi importado ainda. Envie em 'Importar dados' (ex: AM.xlsx).")
+        else:
+            st.markdown(tabela_carg, unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    with col_carg2:
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        st.markdown('<p class="painel-titulo"><span class="ic">🚚</span>Rotas por Tipo de Equipamento</p>', unsafe_allow_html=True)
+        tabela_tipo = tabela_rotas_por_tipo_equipamento(df_cargas_filtrado)
+        if tabela_tipo is None:
+            st.info("Nenhum arquivo de CARGAS foi importado ainda. Envie em 'Importar dados' (ex: AM.xlsx).")
+        else:
+            st.markdown(tabela_tipo, unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 def renderizar_cargas(df_cargas, titulo_geo="por Estado", mostrar_estado=True):
     """Renderiza os indicadores de CARGAS (rotas/equipamentos do RoadNet):
@@ -2071,6 +2172,27 @@ def renderizar_pagina_estado(estado):
                 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
                 st.markdown(f"**Pedidos liberados de {label_estado} que ainda nao foram montados:**")
                 st.markdown(tabela_premium_html(formatar_tabela(df_pendentes_e[[c for c in COLUNAS_EXIB_E if c in df_pendentes_e.columns]])), unsafe_allow_html=True)
+
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+        col_carg1_e, col_carg2_e = st.columns(2)
+        with col_carg1_e:
+            st.markdown('<div class="painel">', unsafe_allow_html=True)
+            st.markdown('<p class="painel-titulo"><span class="ic">🚛</span>Cargas</p>', unsafe_allow_html=True)
+            tabela_carg_e = tabela_cargas_resumo_estado(df_cargas_f)
+            if tabela_carg_e is None:
+                st.info(f"Nenhum arquivo de CARGAS foi importado para {label_estado} ainda. Envie em 'Importar dados' (ex: {estado}.xlsx).")
+            else:
+                st.markdown(tabela_carg_e, unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        with col_carg2_e:
+            st.markdown('<div class="painel">', unsafe_allow_html=True)
+            st.markdown('<p class="painel-titulo"><span class="ic">🚚</span>Rotas por Tipo de Equipamento</p>', unsafe_allow_html=True)
+            tabela_tipo_e = tabela_rotas_por_tipo_equipamento(df_cargas_f)
+            if tabela_tipo_e is None:
+                st.info(f"Nenhum arquivo de CARGAS foi importado para {label_estado} ainda. Envie em 'Importar dados' (ex: {estado}.xlsx).")
+            else:
+                st.markdown(tabela_tipo_e, unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
     with tabs_estado[4]:
         renderizar_cargas(df_cargas_f, mostrar_estado=False)
