@@ -367,6 +367,8 @@ def carregar_geral_da_planilha(tipo):
     for col in ["DATA", "DTENTREGA"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce")
+    if "DATA_IMPORTACAO" in df.columns:
+        df["DATA_IMPORTACAO"] = normalizar_data_importacao(df["DATA_IMPORTACAO"])
     return df
 
 def salvar_estado_na_planilha(estado, tipo, df):
@@ -374,7 +376,7 @@ def salvar_estado_na_planilha(estado, tipo, df):
     marcando a data de importacao. Remove antes as linhas do MESMO estado com a
     MESMA data de importacao, para nao duplicar caso o arquivo seja reenviado no
     mesmo dia."""
-    hoje = time.strftime("%Y-%m-%d")
+    hoje = time.strftime(FORMATO_DATA_IMPORTACAO)
 
     df_novo = df.copy()
     df_novo["DATA_IMPORTACAO"] = hoje
@@ -549,6 +551,27 @@ def normalizar_numped(serie):
     resultado = resultado.where(numeros.notna(), serie.astype(str).str.strip())
     resultado = resultado.replace("<NA>", "").str.strip()
     return resultado
+
+FORMATO_DATA_IMPORTACAO = "%d/%m/%Y"
+
+def normalizar_data_importacao(serie):
+    """Converte a coluna DATA_IMPORTACAO para o padrao dd/mm/aaaa, aceitando tanto
+    esse formato quanto o antigo aaaa-mm-dd (usado antes desse ajuste) - assim as
+    linhas antigas ja gravadas na planilha sao exibidas certas tambem."""
+    s = serie.astype(str).str.strip()
+    dt = pd.to_datetime(s, format="%Y-%m-%d", errors="coerce")
+    faltando = dt.isna()
+    if faltando.any():
+        dt.loc[faltando] = pd.to_datetime(s[faltando], format=FORMATO_DATA_IMPORTACAO, errors="coerce")
+    return dt.dt.strftime(FORMATO_DATA_IMPORTACAO).where(dt.notna(), s)
+
+def ordenar_datas_importacao_desc(lista_datas):
+    """Ordena uma lista de datas no formato dd/mm/aaaa da mais recente para a mais antiga."""
+    return sorted(
+        lista_datas,
+        key=lambda d: pd.to_datetime(d, format=FORMATO_DATA_IMPORTACAO, errors="coerce"),
+        reverse=True,
+    )
 
 def ler_arquivo_upload(arquivo):
     """Le um arquivo enviado pelo usuario (.xlsx, .xls ou .csv) para um DataFrame."""
@@ -1165,7 +1188,7 @@ with col_f1:
 
 with col_f2:
     if "DATA_IMPORTACAO" in df.columns:
-        datas_disp = sorted(df["DATA_IMPORTACAO"].astype(str).unique().tolist(), reverse=True)
+        datas_disp = ordenar_datas_importacao_desc(df["DATA_IMPORTACAO"].astype(str).unique().tolist())
         datas_sel = st.multiselect("🗓️ Data de Importacao", options=datas_disp, placeholder="Todo o historico")
     else:
         datas_sel = []
@@ -1669,7 +1692,7 @@ def renderizar_pagina_estado(estado):
         cidades_sel_e = st.multiselect("🏙️ Cidade", options=cidades_disp_e, placeholder="Todas as cidades", key=f"cidade_{estado}")
     with col_c2:
         if "DATA_IMPORTACAO" in df_lib_estado.columns:
-            datas_disp_e = sorted(df_lib_estado["DATA_IMPORTACAO"].astype(str).unique().tolist(), reverse=True)
+            datas_disp_e = ordenar_datas_importacao_desc(df_lib_estado["DATA_IMPORTACAO"].astype(str).unique().tolist())
             datas_sel_e = st.multiselect("🗓️ Data Importacao", options=datas_disp_e, placeholder="Todo o historico", key=f"data_{estado}")
         else:
             datas_sel_e = []
