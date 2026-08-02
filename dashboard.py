@@ -1271,21 +1271,8 @@ if df.empty:
     st.stop()
 
 # ==================================================
-# CABECALHO SUPERIOR
+# ACOES DO TOPO
 # ==================================================
-st.markdown(f"""
-<div class="topo-header">
-    <div>
-        <h2>Ola, Gestor 👋</h2>
-        <div class="sub">Acompanhe os pedidos em tempo real</div>
-    </div>
-    <div class="topo-meta">
-        <div class="lbl">Ultima atualizacao</div>
-        <div class="val">{time.strftime('%d/%m/%Y as %H:%M:%S')}</div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
 col_espaco, col_atualiza = st.columns([5, 1.1])
 with col_atualiza:
     if st.button("🔄  Atualizar Dados", use_container_width=True):
