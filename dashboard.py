@@ -52,13 +52,19 @@ footer {visibility: hidden;}
 html, body, .stApp {
     background-color: var(--bg-base) !important;
     font-family: 'Inter', sans-serif !important;
+    min-height: 100vh;
 }
 
 /* ---------- FUNDO EM CAMADAS ---------- */
-.stApp {
+/* Fica no <html> (raiz real da pagina) em vez de .stApp: containers internos do
+   Streamlit as vezes aplicam transform/filter em elementos por cima de .stApp,
+   o que "prende" o position:fixed dentro deles e faz o fundo sumir (fica preto)
+   assim que a pagina rola alem da altura do conteudo. */
+html {
     position: relative;
+    min-height: 100%;
 }
-.stApp::before {
+html::before {
     content: "";
     position: fixed;
     inset: 0;
@@ -74,7 +80,7 @@ html, body, .stApp {
     filter: blur(3px) saturate(0.9);
     transform: scale(1.03);
 }
-.stApp::after {
+html::after {
     content: "";
     position: fixed;
     inset: 0;
@@ -1128,7 +1134,6 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
         modo_importacao = "Individual (um estado por vez)"
 
     if modo_importacao.startswith("Individual"):
-        st.caption("Envie junto os arquivos de Liberados, Montados e/ou Cargas desse estado — o tipo de cada arquivo e identificado automaticamente (pelo nome ou pelas colunas). Cada importacao vira um novo registro no historico, marcado com a data escolhida abaixo; reimportar o mesmo estado na mesma data so substitui os dados daquela data.")
         if is_admin:
             estado_individual = st.selectbox(
                 "Estado", list(ESTADOS_LABELS.keys()),
