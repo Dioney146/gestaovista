@@ -5,6 +5,7 @@ import io
 import re
 import json
 import time
+import datetime
 import urllib.request
 import plotly.express as px
 import plotly.graph_objects as go
@@ -371,21 +372,21 @@ def carregar_geral_da_planilha(tipo):
         df["DATA_IMPORTACAO"] = normalizar_data_importacao(df["DATA_IMPORTACAO"])
     return df
 
-def salvar_estado_na_planilha(estado, tipo, df):
-    """Acrescenta os pedidos de hoje ao historico geral (aba LIBERADOS ou MONTADOS),
-    marcando a data de importacao. Remove antes as linhas do MESMO estado com a
-    MESMA data de importacao, para nao duplicar caso o arquivo seja reenviado no
-    mesmo dia."""
-    hoje = time.strftime(FORMATO_DATA_IMPORTACAO)
+def salvar_estado_na_planilha(estado, tipo, df, data_importacao=None):
+    """Acrescenta os pedidos ao historico geral (aba LIBERADOS/MONTADOS/CARGAS),
+    marcando a data de importacao (hoje, por padrao, ou a data escolhida na tela de
+    importacao). Remove antes as linhas do MESMO estado com a MESMA data de
+    importacao, para nao duplicar caso o arquivo seja reenviado para aquela data."""
+    data_alvo = data_importacao or time.strftime(FORMATO_DATA_IMPORTACAO)
 
     df_novo = df.copy()
-    df_novo["DATA_IMPORTACAO"] = hoje
+    df_novo["DATA_IMPORTACAO"] = data_alvo
 
     df_historico = carregar_geral_da_planilha(tipo)
     if not df_historico.empty:
         mascara_manter = ~(
             (df_historico["ESTADO"].astype(str) == estado) &
-            (df_historico["DATA_IMPORTACAO"].astype(str) == hoje)
+            (df_historico["DATA_IMPORTACAO"].astype(str) == data_alvo)
         )
         df_historico = df_historico[mascara_manter]
         df_final = pd.concat([df_historico, df_novo], ignore_index=True)
@@ -1053,11 +1054,12 @@ if not usuario_logado:
 # ==================================================
 # IMPORTACAO DE DADOS (upload manual, direto no site)
 # ==================================================
-def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual):
+def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual, data_importacao=None):
     """Processa uma lista de arquivos ja enviados e MESCLA o resultado dentro de
     st.session_state['dados_por_estado'], por (estado, tipo). Reprocessar um
     estado/tipo substitui somente aquele par - os demais estados ja carregados
-    permanecem intactos."""
+    permanecem intactos. data_importacao (dd/mm/aaaa) marca com que data o lote
+    fica salvo no historico - por padrao, hoje."""
     agrupados = {}
     erros = []
     for arquivo in arquivos:
@@ -1086,14 +1088,17 @@ def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual):
         except Exception as e:
             erros.append(f"{arquivo.name}: {e}")
 
+    data_alvo = data_importacao or time.strftime(FORMATO_DATA_IMPORTACAO)
+
     resumo_ok = []
     for (estado, tipo), lista_dfs in agrupados.items():
         df_concat = pd.concat(lista_dfs, ignore_index=True)
+        df_concat["DATA_IMPORTACAO"] = data_alvo
         chave = {"LIBERADOS": "liberados", "MONTADOS": "montados", "CARGAS": "cargas"}[tipo]
         st.session_state["dados_por_estado"].setdefault(estado, {})[chave] = df_concat
         if planilha_configurada():
             try:
-                salvar_estado_na_planilha(estado, tipo, df_concat)
+                salvar_estado_na_planilha(estado, tipo, df_concat, data_importacao=data_alvo)
             except Exception as e:
                 erros.append(f"Nao foi possivel salvar {estado} ({tipo}) na planilha compartilhada: {e}")
         resumo_ok.append(f"{estado} ({tipo.title()}): {len(df_concat)} registro(s)")
@@ -1123,7 +1128,7 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
         modo_importacao = "Individual (um estado por vez)"
 
     if modo_importacao.startswith("Individual"):
-        st.caption("Envie junto os arquivos de Liberados, Montados e/ou Cargas desse estado — o tipo de cada arquivo e identificado automaticamente (pelo nome ou pelas colunas). Cada importacao vira um novo registro no historico (marcado com a data de hoje); reimportar o mesmo estado no mesmo dia so substitui os dados de hoje.")
+        st.caption("Envie junto os arquivos de Liberados, Montados e/ou Cargas desse estado — o tipo de cada arquivo e identificado automaticamente (pelo nome ou pelas colunas). Cada importacao vira um novo registro no historico, marcado com a data escolhida abaixo; reimportar o mesmo estado na mesma data so substitui os dados daquela data.")
         if is_admin:
             estado_individual = st.selectbox(
                 "Estado", list(ESTADOS_LABELS.keys()),
@@ -1132,6 +1137,11 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
         else:
             estado_individual = usuario_logado
             st.write(f"Enviando dados de: **{ESTADOS_LABELS.get(estado_individual, estado_individual)}**")
+
+        data_individual = st.date_input(
+            "🗓️ Data de importacao (use uma data anterior se estiver importando com atraso)",
+            value=datetime.date.today(), format="DD/MM/YYYY", key="data_individual_sel"
+        )
 
         arquivos_individual = st.file_uploader(
             f"Liberados, Montados e Cargas - {estado_individual}", type=["xlsx", "xls", "csv"],
@@ -1143,15 +1153,21 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
                 st.warning("Envie ao menos um arquivo (Liberados, Montados e/ou Cargas) para processar.")
             else:
                 mapa_estado_manual = {a.name: estado_individual for a in arquivos_individual}
-                erros, resumo_ok = processar_lote(arquivos_individual, mapa_estado_manual, {})
+                data_str = data_individual.strftime(FORMATO_DATA_IMPORTACAO)
+                erros, resumo_ok = processar_lote(arquivos_individual, mapa_estado_manual, {}, data_importacao=data_str)
                 st.session_state["erros_importacao"] = erros
                 if resumo_ok:
-                    st.success("Dados de " + estado_individual + " atualizados! " + " | ".join(resumo_ok))
+                    st.success(f"Dados de {estado_individual} atualizados com data de importacao {data_str}! " + " | ".join(resumo_ok))
                     st.rerun()
                 elif not erros:
                     st.warning("Nenhum arquivo valido foi processado.")
 
     else:
+        data_combinada = st.date_input(
+            "🗓️ Data de importacao (use uma data anterior se estiver importando com atraso)",
+            value=datetime.date.today(), format="DD/MM/YYYY", key="data_combinada_sel"
+        )
+
         arquivos = st.file_uploader(
             "Arraste os arquivos de LIBERADOS, MONTADOS e CARGAS de todos os estados aqui — estado e tipo sao identificados automaticamente",
             type=["xlsx", "xls", "csv"],
@@ -1206,10 +1222,11 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
             if not arquivos:
                 st.warning("Nenhum arquivo foi enviado. Selecione ao menos um arquivo e clique em processar novamente.")
             else:
-                erros, resumo_ok = processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual)
+                data_str_comb = data_combinada.strftime(FORMATO_DATA_IMPORTACAO)
+                erros, resumo_ok = processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual, data_importacao=data_str_comb)
                 st.session_state["erros_importacao"] = erros
                 if resumo_ok:
-                    st.success("Dados importados com sucesso! " + " | ".join(resumo_ok))
+                    st.success(f"Dados importados com sucesso com data de importacao {data_str_comb}! " + " | ".join(resumo_ok))
                     st.rerun()
                 elif not erros:
                     st.warning("Nenhum arquivo valido foi processado.")
