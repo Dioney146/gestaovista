@@ -134,6 +134,7 @@ h1, h2, h3, h4, h5, h6, p, label, li, a { color: var(--text-main) !important; fo
     color: #fff !important; border-left: 3px solid var(--accent) !important;
     box-shadow: var(--shadow-glow); font-weight: 700 !important;
 }
+.sb-secao { font-size: 10.5px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--text-sub); font-weight: 700; margin: 14px 4px 6px 4px; opacity: .75; }
 
 /* ---------- CABECALHO ---------- */
 .topo-header {
@@ -693,6 +694,11 @@ ITENS_MENU = [
 if "pagina_ativa" not in st.session_state:
     st.session_state["pagina_ativa"] = "Dashboard"
 
+# Dados guardados de forma individual/separada por estado:
+# { "AM": {"liberados": df, "montados": df}, "BA": {...}, ... }
+if "dados_por_estado" not in st.session_state:
+    st.session_state["dados_por_estado"] = {}
+
 with st.sidebar:
     st.markdown("""
     <div class="sb-logo">
@@ -713,119 +719,191 @@ with st.sidebar:
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
+    estados_com_dados = sorted(st.session_state["dados_por_estado"].keys())
+    if estados_com_dados:
+        st.markdown('<div class="sb-secao">Paginas por estado</div>', unsafe_allow_html=True)
+        for estado in estados_com_dados:
+            chave_pagina = f"ESTADO::{estado}"
+            ativo = st.session_state["pagina_ativa"] == chave_pagina
+            wrapper_class = "sb-ativo" if ativo else ""
+            st.markdown(f'<div class="{wrapper_class}">', unsafe_allow_html=True)
+            if st.button(f"🟠   {estado}", key=f"nav_estado_{estado}", use_container_width=True):
+                st.session_state["pagina_ativa"] = chave_pagina
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
 pagina_ativa = st.session_state["pagina_ativa"]
 
 # ==================================================
 # IMPORTACAO DE DADOS (upload manual, direto no site)
 # ==================================================
-with st.expander("📥 Importar dados", expanded=("dados_carregados" not in st.session_state)):
-    arquivos = st.file_uploader(
-        "Arraste os arquivos de LIBERADOS e MONTADOS de todos os estados aqui — estado e tipo sao identificados automaticamente",
-        type=["xlsx", "xls", "csv"],
-        accept_multiple_files=True,
+def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual):
+    """Processa uma lista de arquivos ja enviados e MESCLA o resultado dentro de
+    st.session_state['dados_por_estado'], por (estado, tipo). Reprocessar um
+    estado/tipo substitui somente aquele par - os demais estados ja carregados
+    permanecem intactos."""
+    agrupados = {}
+    erros = []
+    for arquivo in arquivos:
+        try:
+            estado = detectar_estado_pelo_nome(arquivo.name) or mapa_estado_manual.get(arquivo.name)
+            tipo   = detectar_tipo_pelo_nome(arquivo.name) or mapa_tipo_manual.get(arquivo.name) or "LIBERADOS"
+            if estado is None:
+                erros.append(f"{arquivo.name}: nao foi possivel identificar o estado.")
+                continue
+            df_arquivo = ler_arquivo_upload(arquivo)
+            if tipo == "MONTADOS":
+                df_arquivo = tratar_dataframe_montados(df_arquivo)
+            else:
+                df_arquivo = tratar_dataframe(df_arquivo)
+            df_arquivo["ESTADO"] = estado
+            agrupados.setdefault((estado, tipo), []).append(df_arquivo)
+        except Exception as e:
+            erros.append(f"{arquivo.name}: {e}")
+
+    resumo_ok = []
+    for (estado, tipo), lista_dfs in agrupados.items():
+        df_concat = pd.concat(lista_dfs, ignore_index=True)
+        chave = "liberados" if tipo == "LIBERADOS" else "montados"
+        st.session_state["dados_por_estado"].setdefault(estado, {})[chave] = df_concat
+        resumo_ok.append(f"{estado} ({tipo.title()}): {len(df_concat)} pedido(s)")
+
+    return erros, resumo_ok
+
+with st.expander("📥 Importar dados", expanded=(not st.session_state["dados_por_estado"])):
+    modo_importacao = st.radio(
+        "Modo de importacao",
+        ["Individual (um estado por vez)", "Combinada (varios arquivos/estados de uma vez)"],
+        horizontal=True,
     )
 
-    mapa_estado_manual = {}
-    mapa_tipo_manual = {}
+    if modo_importacao.startswith("Individual"):
+        st.caption("Escolha o estado e envie os arquivos dele. Reprocessar um estado nao apaga os demais ja carregados.")
+        col_estado, col_lib, col_mont = st.columns([1, 2, 2])
+        with col_estado:
+            estado_individual = st.selectbox(
+                "Estado", list(ESTADOS_LABELS.keys()),
+                format_func=lambda e: ESTADOS_LABELS[e], key="estado_individual_sel"
+            )
+        with col_lib:
+            arquivos_lib_ind = st.file_uploader(
+                f"Liberados - {estado_individual}", type=["xlsx", "xls", "csv"],
+                accept_multiple_files=True, key=f"up_lib_{estado_individual}"
+            )
+        with col_mont:
+            arquivos_mont_ind = st.file_uploader(
+                f"Montados - {estado_individual}", type=["xlsx", "xls", "csv"],
+                accept_multiple_files=True, key=f"up_mont_{estado_individual}"
+            )
 
-    if arquivos:
-        estado_indef = [a for a in arquivos if detectar_estado_pelo_nome(a.name) is None]
-        tipo_indef   = [a for a in arquivos if detectar_tipo_pelo_nome(a.name) is None]
+        if st.button(f"Processar dados de {estado_individual}", type="primary", use_container_width=True):
+            arquivos_tag = list(arquivos_lib_ind or []) + list(arquivos_mont_ind or [])
+            if not arquivos_tag:
+                st.warning("Envie ao menos um arquivo (Liberados e/ou Montados) para processar.")
+            else:
+                mapa_estado_manual = {a.name: estado_individual for a in arquivos_tag}
+                mapa_tipo_manual = {a.name: "LIBERADOS" for a in (arquivos_lib_ind or [])}
+                mapa_tipo_manual.update({a.name: "MONTADOS" for a in (arquivos_mont_ind or [])})
+                erros, resumo_ok = processar_lote(arquivos_tag, mapa_estado_manual, mapa_tipo_manual)
+                st.session_state["erros_importacao"] = erros
+                if resumo_ok:
+                    st.success("Dados de " + estado_individual + " atualizados! " + " | ".join(resumo_ok))
+                    st.rerun()
+                elif not erros:
+                    st.warning("Nenhum arquivo valido foi processado.")
 
-        if estado_indef or tipo_indef:
-            st.caption("Nao identifiquei automaticamente alguns arquivos — confirme manualmente:")
-            for arq in arquivos:
-                precisa_estado = arq in estado_indef
-                precisa_tipo = arq in tipo_indef
-                if not precisa_estado and not precisa_tipo:
-                    continue
-                col_nome, col_tipo, col_est = st.columns([2.4, 1, 1])
-                with col_nome:
-                    st.write(arq.name)
-                with col_tipo:
-                    if precisa_tipo:
-                        mapa_tipo_manual[arq.name] = st.selectbox(
-                            "Tipo", ["LIBERADOS", "MONTADOS"],
-                            key=f"tipo_{arq.name}", label_visibility="collapsed"
-                        )
-                with col_est:
-                    if precisa_estado:
-                        mapa_estado_manual[arq.name] = st.selectbox(
-                            "Estado", list(ESTADOS_LABELS.keys()),
-                            key=f"manual_{arq.name}", label_visibility="collapsed"
-                        )
+    else:
+        arquivos = st.file_uploader(
+            "Arraste os arquivos de LIBERADOS e MONTADOS de todos os estados aqui — estado e tipo sao identificados automaticamente",
+            type=["xlsx", "xls", "csv"],
+            accept_multiple_files=True,
+            key="up_combinado",
+        )
 
-    col_btn1, col_btn2 = st.columns([1, 1])
-    with col_btn1:
-        processar = st.button("Processar dados", type="primary", use_container_width=True)
-    with col_btn2:
-        limpar = st.button("Limpar dados carregados", use_container_width=True)
+        mapa_estado_manual = {}
+        mapa_tipo_manual = {}
 
-    if limpar:
-        st.session_state.pop("dados_carregados", None)
-        st.session_state.pop("dados_montados", None)
-        st.session_state.pop("erros_importacao", None)
-        st.rerun()
+        if arquivos:
+            estado_indef = [a for a in arquivos if detectar_estado_pelo_nome(a.name) is None]
+            tipo_indef   = [a for a in arquivos if detectar_tipo_pelo_nome(a.name) is None]
 
-    if processar:
-        if not arquivos:
-            st.warning("Nenhum arquivo foi enviado. Selecione ao menos um arquivo e clique em processar novamente.")
-        else:
-            frames_liberados = []
-            frames_montados = []
-            erros = []
-            for arquivo in arquivos:
-                try:
-                    estado = detectar_estado_pelo_nome(arquivo.name) or mapa_estado_manual.get(arquivo.name)
-                    tipo   = detectar_tipo_pelo_nome(arquivo.name) or mapa_tipo_manual.get(arquivo.name) or "LIBERADOS"
-                    if estado is None:
-                        erros.append(f"{arquivo.name}: nao foi possivel identificar o estado.")
+            if estado_indef or tipo_indef:
+                st.caption("Nao identifiquei automaticamente alguns arquivos — confirme manualmente:")
+                for arq in arquivos:
+                    precisa_estado = arq in estado_indef
+                    precisa_tipo = arq in tipo_indef
+                    if not precisa_estado and not precisa_tipo:
                         continue
-                    df_arquivo = ler_arquivo_upload(arquivo)
-                    if tipo == "MONTADOS":
-                        df_arquivo = tratar_dataframe_montados(df_arquivo)
-                    else:
-                        df_arquivo = tratar_dataframe(df_arquivo)
-                    df_arquivo["ESTADO"] = estado
-                    if tipo == "MONTADOS":
-                        frames_montados.append(df_arquivo)
-                    else:
-                        frames_liberados.append(df_arquivo)
-                except Exception as e:
-                    erros.append(f"{arquivo.name}: {e}")
+                    col_nome, col_tipo, col_est = st.columns([2.4, 1, 1])
+                    with col_nome:
+                        st.write(arq.name)
+                    with col_tipo:
+                        if precisa_tipo:
+                            mapa_tipo_manual[arq.name] = st.selectbox(
+                                "Tipo", ["LIBERADOS", "MONTADOS"],
+                                key=f"tipo_{arq.name}", label_visibility="collapsed"
+                            )
+                    with col_est:
+                        if precisa_estado:
+                            mapa_estado_manual[arq.name] = st.selectbox(
+                                "Estado", list(ESTADOS_LABELS.keys()),
+                                key=f"manual_{arq.name}", label_visibility="collapsed"
+                            )
 
-            st.session_state["erros_importacao"] = erros
-            mensagens_ok = []
+        processar = st.button("Processar dados", type="primary", use_container_width=True)
 
-            if frames_liberados:
-                estados_lib = sorted(set(f["ESTADO"].iloc[0] for f in frames_liberados))
-                st.session_state["dados_carregados"] = pd.concat(frames_liberados, ignore_index=True)
-                mensagens_ok.append(f"Liberados: {', '.join(estados_lib)}")
+        if processar:
+            if not arquivos:
+                st.warning("Nenhum arquivo foi enviado. Selecione ao menos um arquivo e clique em processar novamente.")
+            else:
+                erros, resumo_ok = processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual)
+                st.session_state["erros_importacao"] = erros
+                if resumo_ok:
+                    st.success("Dados importados com sucesso! " + " | ".join(resumo_ok))
+                    st.rerun()
+                elif not erros:
+                    st.warning("Nenhum arquivo valido foi processado.")
 
-            if frames_montados:
-                estados_mont = sorted(set(f["ESTADO"].iloc[0] for f in frames_montados))
-                st.session_state["dados_montados"] = pd.concat(frames_montados, ignore_index=True)
-                mensagens_ok.append(f"Montados: {', '.join(estados_mont)}")
-
-            if mensagens_ok:
-                st.success("Dados importados com sucesso! " + " | ".join(mensagens_ok))
-            elif not erros:
-                st.warning("Nenhum arquivo valido foi processado.")
+    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+    estados_para_limpar = ["Todos os estados"] + sorted(st.session_state["dados_por_estado"].keys())
+    col_limp1, col_limp2 = st.columns([2, 1])
+    with col_limp1:
+        alvo_limpeza = st.selectbox("Limpar dados carregados de:", estados_para_limpar, key="alvo_limpeza")
+    with col_limp2:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        if st.button("Limpar", use_container_width=True):
+            if alvo_limpeza == "Todos os estados":
+                st.session_state["dados_por_estado"] = {}
+            else:
+                st.session_state["dados_por_estado"].pop(alvo_limpeza, None)
+            st.session_state.pop("erros_importacao", None)
+            st.rerun()
 
 if st.session_state.get("erros_importacao"):
     with st.expander(f"⚠️ {len(st.session_state['erros_importacao'])} erro(s) na importacao"):
         for e in st.session_state["erros_importacao"]:
             st.write(e)
 
-if "dados_carregados" not in st.session_state:
-    st.info("Envie os arquivos de LIBERADOS acima e clique em 'Processar dados' para comecar.")
+def montar_df_geral(chave):
+    """Concatena os dados de todos os estados (armazenados de forma separada) em
+    um unico DataFrame, para alimentar as visoes gerais/agregadas do dashboard."""
+    partes = [
+        v[chave] for v in st.session_state["dados_por_estado"].values()
+        if chave in v and v[chave] is not None and not v[chave].empty
+    ]
+    if not partes:
+        return pd.DataFrame()
+    return pd.concat(partes, ignore_index=True)
+
+if not st.session_state["dados_por_estado"]:
+    st.info("Envie os arquivos de LIBERADOS acima (individual ou combinado) e clique em 'Processar dados' para comecar.")
     st.stop()
 
-df = st.session_state["dados_carregados"]
-df_montados_bruto = st.session_state.get("dados_montados", pd.DataFrame())
+df = montar_df_geral("liberados")
+df_montados_bruto = montar_df_geral("montados")
 
 if df.empty:
-    st.warning("Os arquivos importados nao geraram nenhum pedido valido. Confira os arquivos e tente novamente.")
+    st.warning("Os arquivos importados nao geraram nenhum pedido de LIBERADOS valido. Confira os arquivos e tente novamente.")
     st.stop()
 
 # ==================================================
@@ -1326,41 +1404,204 @@ def renderizar_rodape():
             )
 
 # ==================================================
+# PAGINA DEDICADA POR ESTADO
+# ==================================================
+def renderizar_pagina_estado(estado):
+    """Pagina isolada de um unico estado: usa somente os dados carregados
+    (liberados/montados) daquele estado especifico, com seus proprios filtros
+    de cidade/posicao/tipo de venda - independente da selecao global."""
+    dados_estado = st.session_state["dados_por_estado"].get(estado, {})
+    df_lib_estado = dados_estado.get("liberados", pd.DataFrame())
+    df_mont_estado = dados_estado.get("montados", pd.DataFrame())
+
+    label_estado = ESTADOS_LABELS.get(estado, estado)
+    st.markdown(f"""
+    <div class="topo-header">
+        <div>
+            <h2>🟠 {label_estado}</h2>
+            <div class="sub">Dados individuais deste estado</div>
+        </div>
+        <div class="topo-meta">
+            <div class="lbl">Ultima atualizacao</div>
+            <div class="val">{time.strftime('%d/%m/%Y as %H:%M:%S')}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if df_lib_estado.empty:
+        st.info(f"Nenhum pedido de LIBERADOS carregado para {label_estado} ainda.")
+        return
+
+    st.markdown('<div class="glass-box">', unsafe_allow_html=True)
+    st.markdown('<p class="filter-title">🔎 Filtros do estado</p>', unsafe_allow_html=True)
+    col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
+    with col_c1:
+        cidades_disp_e = sorted(df_lib_estado["CIDADE"].astype(str).unique().tolist()) if "CIDADE" in df_lib_estado.columns else []
+        cidades_sel_e = st.multiselect("🏙️ Cidade", options=cidades_disp_e, placeholder="Todas as cidades", key=f"cidade_{estado}")
+    with col_c2:
+        if "POSICAO" in df_lib_estado.columns:
+            posicoes_disp_e = ["Todas"] + sorted(df_lib_estado["POSICAO"].astype(str).unique().tolist())
+            posicao_sel_e = st.selectbox("📋 Posicao", posicoes_disp_e, key=f"posicao_{estado}")
+        else:
+            posicao_sel_e = "Todas"
+    with col_c3:
+        if "TIPOVENDA" in df_lib_estado.columns:
+            tipos_disp_e = ["Todos"] + sorted(df_lib_estado["TIPOVENDA"].astype(str).unique().tolist())
+            tipo_sel_e = st.selectbox("🏷️ Tipo Venda", tipos_disp_e, key=f"tipovenda_{estado}")
+        else:
+            tipo_sel_e = "Todos"
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    df_lib_f = df_lib_estado.copy()
+    if cidades_sel_e:
+        df_lib_f = df_lib_f[df_lib_f["CIDADE"].isin(cidades_sel_e)]
+    if posicao_sel_e != "Todas" and "POSICAO" in df_lib_f.columns:
+        df_lib_f = df_lib_f[df_lib_f["POSICAO"].astype(str) == posicao_sel_e]
+    if tipo_sel_e != "Todos" and "TIPOVENDA" in df_lib_f.columns:
+        df_lib_f = df_lib_f[df_lib_f["TIPOVENDA"].astype(str) == tipo_sel_e]
+
+    df_mont_f = df_mont_estado.copy()
+    if not df_mont_f.empty and cidades_sel_e and "CIDADE" in df_mont_f.columns:
+        df_mont_f = df_mont_f[df_mont_f["CIDADE"].isin(cidades_sel_e)]
+
+    total_pedidos_e = len(df_lib_f)
+    total_valor_e   = df_lib_f["VLTOTAL"].sum()      if "VLTOTAL" in df_lib_f.columns else 0
+    total_peso_e    = df_lib_f["PESOBRUTOTOT"].sum() if "PESOBRUTOTOT" in df_lib_f.columns else 0
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown(kpi_card_premium("📦", "Pedidos Liberados", fmt_int(total_pedidos_e), label_estado, serie_diaria(df_lib_f, "NUMPED", "count")), unsafe_allow_html=True)
+    with c2:
+        st.markdown(kpi_card_premium("💰", "Valor Total", fmt_brl(total_valor_e), label_estado, serie_diaria(df_lib_f, "VLTOTAL", "sum")), unsafe_allow_html=True)
+    with c3:
+        st.markdown(kpi_card_premium("⚖️", "Peso Total", fmt_kg(total_peso_e), label_estado, serie_diaria(df_lib_f, "PESOBRUTOTOT", "sum")), unsafe_allow_html=True)
+
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+    tabs_estado = st.tabs(["Por Municipio", "Por Praca", "Detalhes dos Pedidos", "Montados x Liberados"])
+
+    with tabs_estado[0]:
+        if df_lib_f.empty:
+            st.info("Nenhum dado disponivel.")
+        else:
+            col_tab, col_graf = st.columns([1.2, 1])
+            with col_tab:
+                st.markdown(montar_tabela_com_total(resumo_por_cidade(df_lib_f), "Cidade"), unsafe_allow_html=True)
+            with col_graf:
+                dados_grafico_e = df_lib_f.groupby("CIDADE")["VLTOTAL"].sum().sort_values(ascending=False).head(10).reset_index()
+                fig_e = px.bar(dados_grafico_e, x="VLTOTAL", y="CIDADE", orientation="h", title="Top 10 Cidades por Valor",
+                                color="VLTOTAL", color_continuous_scale=GRADIENTE_LARANJA)
+                fig_e.update_traces(marker_line_width=0, hovertemplate="<b>%{y}</b><br>Valor: R$ %{x:,.2f}<extra></extra>")
+                fig_e.update_layout(yaxis=dict(autorange="reversed", title=""), xaxis=dict(title="", tickprefix="R$ ", separatethousands=True), coloraxis_showscale=False)
+                aplicar_tema_grafico(fig_e)
+                st.plotly_chart(fig_e, use_container_width=True)
+
+    with tabs_estado[1]:
+        if "PRACA" not in df_lib_f.columns or df_lib_f.empty:
+            st.info("Nenhum dado de Praca disponivel.")
+        else:
+            praca_df_e = df_lib_f.groupby("PRACA").agg(
+                Pedidos=("NUMPED", "count"), Valor=("VLTOTAL", "sum"), Peso=("PESOBRUTOTOT", "sum")
+            ).reset_index().sort_values("Valor", ascending=False)
+            fig_pr_e = px.bar(praca_df_e.sort_values("Valor"), x="Valor", y="PRACA", orientation="h", title="Valor por Praca",
+                               color="Valor", color_continuous_scale=GRADIENTE_LARANJA, custom_data=["Pedidos"])
+            fig_pr_e.update_traces(marker_line_width=0, hovertemplate="<b>%{y}</b><br>Valor: R$ %{x:,.2f}<br>Pedidos: %{customdata[0]}<extra></extra>")
+            fig_pr_e.update_layout(yaxis=dict(autorange="reversed", title=""), xaxis=dict(title="", tickprefix="R$ ", separatethousands=True), coloraxis_showscale=False)
+            aplicar_tema_grafico(fig_pr_e)
+            st.plotly_chart(fig_pr_e, use_container_width=True)
+            st.markdown(montar_tabela_com_total(praca_df_e, "Praca" if "Praca" in praca_df_e.columns else "PRACA"), unsafe_allow_html=True)
+
+    with tabs_estado[2]:
+        COLUNAS_EXIB_E = [c for c in [
+            "NUMPED", "DATA", "NOMECLIENTE", "CIDADE", "PRACA",
+            "NOMESUP", "NOMERCA", "POSICAO", "TIPOVENDA",
+            "VLTOTAL", "PESOBRUTOTOT", "DTENTREGA",
+            "NUMCARREGAMENTO", "PLACA", "DESTINO"
+        ] if c in df_lib_f.columns]
+
+        col_busca_e, col_export_e = st.columns([3, 1])
+        with col_busca_e:
+            busca_e = st.text_input("🔍 Busca rapida:", placeholder="Digite para filtrar...", key=f"busca_{estado}")
+        df_exib_e = df_lib_f[COLUNAS_EXIB_E].copy()
+        if busca_e:
+            mask_e = df_exib_e.astype(str).apply(lambda row: row.str.contains(busca_e, case=False).any(), axis=1)
+            df_exib_e = df_exib_e[mask_e]
+        with col_export_e:
+            buffer_e = io.BytesIO()
+            with pd.ExcelWriter(buffer_e, engine="openpyxl") as writer:
+                formatar_tabela(df_exib_e).to_excel(writer, index=False, sheet_name=estado)
+            st.download_button("⬇️ Exportar Excel", data=buffer_e.getvalue(), file_name=f"pedidos_{estado}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key=f"down_{estado}")
+
+        st.caption(f"{fmt_int(len(df_exib_e))} pedidos encontrados")
+        st.markdown(tabela_premium_html(formatar_tabela(df_exib_e)), unsafe_allow_html=True)
+
+    with tabs_estado[3]:
+        if df_mont_estado.empty:
+            st.markdown('<div class="glass-box">', unsafe_allow_html=True)
+            st.write(f"Nenhum arquivo de **MONTADOS** foi importado para {label_estado} ainda. "
+                     "Use a importacao individual acima e envie o arquivo de Montados deste estado.")
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            df_pendentes_e = calcular_pendentes_montados(df_lib_f, df_mont_f)
+            total_mont_e = len(df_mont_f)
+            total_lib_e = len(df_lib_f)
+            total_pend_e = len(df_pendentes_e)
+            pct_e = ((total_lib_e - total_pend_e) / total_lib_e * 100) if total_lib_e else 0
+
+            cc1, cc2, cc3 = st.columns(3)
+            with cc1:
+                st.markdown(kpi_card_premium("🧩", "Total Montados", fmt_int(total_mont_e), label_estado, []), unsafe_allow_html=True)
+            with cc2:
+                st.markdown(kpi_card_premium("⏳", "Ficaram para Tras", fmt_int(total_pend_e), "Liberados ainda nao montados", [], cor="#ef4444"), unsafe_allow_html=True)
+            with cc3:
+                st.markdown(kpi_card_premium("✅", "% Atendimento", f"{pct_e:.1f}%", label_estado, []), unsafe_allow_html=True)
+
+            if total_pend_e:
+                st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+                st.markdown(f"**Pedidos liberados de {label_estado} que ainda nao foram montados:**")
+                st.markdown(tabela_premium_html(formatar_tabela(df_pendentes_e[[c for c in COLUNAS_EXIB_E if c in df_pendentes_e.columns]])), unsafe_allow_html=True)
+
+# ==================================================
 # ROTEAMENTO DE PAGINAS (SIDEBAR)
 # ==================================================
-renderizar_kpis()
+if pagina_ativa.startswith("ESTADO::"):
+    estado_pagina = pagina_ativa.split("::", 1)[1]
+    renderizar_pagina_estado(estado_pagina)
+else:
+    renderizar_kpis()
 
-if pagina_ativa == "Dashboard":
-    tabs = st.tabs(["Por Estados", "Por Municipio", "Detalhes dos Pedidos", "Montados"])
-    with tabs[0]: renderizar_por_estados()
-    with tabs[1]: renderizar_por_municipio()
-    with tabs[2]: renderizar_detalhes()
-    with tabs[3]: renderizar_montados()
+    if pagina_ativa == "Dashboard":
+        tabs = st.tabs(["Por Estados", "Por Municipio", "Detalhes dos Pedidos", "Montados"])
+        with tabs[0]: renderizar_por_estados()
+        with tabs[1]: renderizar_por_municipio()
+        with tabs[2]: renderizar_detalhes()
+        with tabs[3]: renderizar_montados()
 
-elif pagina_ativa == "Pedidos":
-    renderizar_detalhes()
+    elif pagina_ativa == "Pedidos":
+        renderizar_detalhes()
 
-elif pagina_ativa == "Estados":
-    renderizar_por_estados()
+    elif pagina_ativa == "Estados":
+        renderizar_por_estados()
 
-elif pagina_ativa == "Mapas":
-    renderizar_mapa()
+    elif pagina_ativa == "Mapas":
+        renderizar_mapa()
 
-elif pagina_ativa == "Relatorios":
-    renderizar_por_municipio()
-    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-    renderizar_por_praca()
+    elif pagina_ativa == "Relatorios":
+        renderizar_por_municipio()
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+        renderizar_por_praca()
 
-elif pagina_ativa == "Alertas":
-    st.markdown('<div class="glass-box">', unsafe_allow_html=True)
-    st.write("Nenhum alerta configurado no momento. Esta area fica pronta para receber regras de alerta (ex: pedidos parados, quedas de valor) em uma proxima etapa.")
-    st.markdown('</div>', unsafe_allow_html=True)
+    elif pagina_ativa == "Alertas":
+        st.markdown('<div class="glass-box">', unsafe_allow_html=True)
+        st.write("Nenhum alerta configurado no momento. Esta area fica pronta para receber regras de alerta (ex: pedidos parados, quedas de valor) em uma proxima etapa.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-elif pagina_ativa == "Configuracoes":
-    st.markdown('<div class="glass-box">', unsafe_allow_html=True)
-    st.write(f"**Estados carregados:** {', '.join(estados_carregados)}")
-    st.write(f"**Total de pedidos na base:** {fmt_int(len(df))}")
-    st.write(f"**Ultima atualizacao:** {time.strftime('%d/%m/%Y as %H:%M:%S')}")
-    st.markdown('</div>', unsafe_allow_html=True)
+    elif pagina_ativa == "Configuracoes":
+        st.markdown('<div class="glass-box">', unsafe_allow_html=True)
+        st.write(f"**Estados carregados:** {', '.join(estados_carregados)}")
+        st.write(f"**Total de pedidos na base:** {fmt_int(len(df))}")
+        st.write(f"**Ultima atualizacao:** {time.strftime('%d/%m/%Y as %H:%M:%S')}")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-renderizar_rodape()
+    renderizar_rodape()
