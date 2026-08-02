@@ -8,6 +8,8 @@ import time
 import urllib.request
 import plotly.express as px
 import plotly.graph_objects as go
+import gspread
+from google.oauth2.service_account import Credentials
 
 st.set_page_config(
     layout="wide",
@@ -309,6 +311,96 @@ MAPA_UF_PARA_ESTADO = {
     "MG": ["MG.ES"],
     "SP": ["SP", "SPW"],
 }
+
+# ==================================================
+# PERSISTENCIA COMPARTILHADA (GOOGLE SHEETS)
+# ==================================================
+# Cada estado/tipo vira uma aba propria na planilha, ex: "AM_LIBERADOS", "AM_MONTADOS".
+# A planilha e a fonte unica de verdade: todo mundo que abre o site ve os mesmos dados,
+# e quem sobe um arquivo novo atualiza a planilha para todo mundo.
+GOOGLE_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+def planilha_configurada():
+    """Verifica se as credenciais do Google Sheets foram configuradas em st.secrets."""
+    return "gcp_service_account" in st.secrets and "GOOGLE_SHEET_ID" in st.secrets
+
+@st.cache_resource(show_spinner=False)
+def obter_cliente_planilha():
+    creds = Credentials.from_service_account_info(
+        dict(st.secrets["gcp_service_account"]), scopes=GOOGLE_SCOPES
+    )
+    return gspread.authorize(creds)
+
+@st.cache_resource(show_spinner=False)
+def obter_planilha():
+    return obter_cliente_planilha().open_by_key(st.secrets["GOOGLE_SHEET_ID"])
+
+def nome_aba(estado, tipo):
+    return f"{estado.replace('.', '_')}_{tipo}"
+
+def salvar_estado_na_planilha(estado, tipo, df):
+    """Substitui o conteudo da aba do estado/tipo pelo DataFrame atual (snapshot mais recente)."""
+    planilha = obter_planilha()
+    aba_alvo = nome_aba(estado, tipo)
+
+    df_export = df.copy()
+    for col in ["DATA", "DTENTREGA"]:
+        if col in df_export.columns and pd.api.types.is_datetime64_any_dtype(df_export[col]):
+            df_export[col] = df_export[col].dt.strftime("%Y-%m-%d").fillna("")
+    df_export = df_export.fillna("").astype(str)
+
+    valores = [df_export.columns.tolist()] + df_export.values.tolist()
+
+    try:
+        aba = planilha.worksheet(aba_alvo)
+        aba.clear()
+    except gspread.WorksheetNotFound:
+        aba = planilha.add_worksheet(
+            title=aba_alvo,
+            rows=str(max(len(valores) + 20, 200)),
+            cols=str(max(len(df_export.columns) + 2, 15)),
+        )
+    aba.update(values=valores)
+
+def apagar_estado_na_planilha(estado, tipo=None):
+    """Limpa a(s) aba(s) do estado na planilha. tipo=None apaga LIBERADOS e MONTADOS."""
+    planilha = obter_planilha()
+    for t in ([tipo] if tipo else ["LIBERADOS", "MONTADOS"]):
+        try:
+            planilha.worksheet(nome_aba(estado, t)).clear()
+        except gspread.WorksheetNotFound:
+            pass
+
+def carregar_estado_da_planilha(estado, tipo):
+    planilha = obter_planilha()
+    try:
+        aba = planilha.worksheet(nome_aba(estado, tipo))
+    except gspread.WorksheetNotFound:
+        return pd.DataFrame()
+
+    valores = aba.get_all_values()
+    if len(valores) < 2:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(valores[1:], columns=valores[0])
+    for col in ["VLTOTAL", "PESOBRUTOTOT"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    for col in ["DATA", "DTENTREGA"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+    df["ESTADO"] = estado
+    return df
+
+@st.cache_data(ttl=120, show_spinner="Carregando dados salvos da planilha...")
+def carregar_todos_os_dados_da_planilha():
+    dados = {}
+    for estado in ESTADOS_LABELS.keys():
+        df_lib = carregar_estado_da_planilha(estado, "LIBERADOS")
+        df_mont = carregar_estado_da_planilha(estado, "MONTADOS")
+        if not df_lib.empty or not df_mont.empty:
+            dados[estado] = {"liberados": df_lib, "montados": df_mont}
+    return dados
 
 def parse_numero_brl(valor):
     """Converte valores numericos vindos da planilha (formato BR ou US) para float."""
@@ -696,8 +788,12 @@ if "pagina_ativa" not in st.session_state:
 
 # Dados guardados de forma individual/separada por estado:
 # { "AM": {"liberados": df, "montados": df}, "BA": {...}, ... }
+# Fonte de verdade: planilha Google Sheets compartilhada (quando configurada em st.secrets).
 if "dados_por_estado" not in st.session_state:
-    st.session_state["dados_por_estado"] = {}
+    if planilha_configurada():
+        st.session_state["dados_por_estado"] = carregar_todos_os_dados_da_planilha()
+    else:
+        st.session_state["dados_por_estado"] = {}
 
 with st.sidebar:
     st.markdown("""
@@ -766,118 +862,189 @@ def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual):
         df_concat = pd.concat(lista_dfs, ignore_index=True)
         chave = "liberados" if tipo == "LIBERADOS" else "montados"
         st.session_state["dados_por_estado"].setdefault(estado, {})[chave] = df_concat
+        if planilha_configurada():
+            try:
+                salvar_estado_na_planilha(estado, tipo, df_concat)
+            except Exception as e:
+                erros.append(f"Nao foi possivel salvar {estado} ({tipo}) na planilha compartilhada: {e}")
         resumo_ok.append(f"{estado} ({tipo.title()}): {len(df_concat)} pedido(s)")
+
+    if planilha_configurada() and resumo_ok:
+        carregar_todos_os_dados_da_planilha.clear()
 
     return erros, resumo_ok
 
-with st.expander("📥 Importar dados", expanded=(not st.session_state["dados_por_estado"])):
-    modo_importacao = st.radio(
-        "Modo de importacao",
-        ["Individual (um estado por vez)", "Combinada (varios arquivos/estados de uma vez)"],
-        horizontal=True,
-    )
+def tela_login_importacao():
+    """Login simples por estado: cada pessoa so consegue enviar dados do seu proprio estado.
+    As senhas ficam em st.secrets['SENHAS_ESTADOS'], nunca no codigo."""
+    senhas_cfg = st.secrets.get("SENHAS_ESTADOS", {})
+    if not senhas_cfg:
+        st.warning("Login de importacao ainda nao configurado. Adicione as senhas em st.secrets['SENHAS_ESTADOS'].")
+        return
 
-    if modo_importacao.startswith("Individual"):
-        st.caption("Escolha o estado e envie os arquivos dele. Reprocessar um estado nao apaga os demais ja carregados.")
-        col_estado, col_lib, col_mont = st.columns([1, 2, 2])
-        with col_estado:
-            estado_individual = st.selectbox(
-                "Estado", list(ESTADOS_LABELS.keys()),
-                format_func=lambda e: ESTADOS_LABELS[e], key="estado_individual_sel"
-            )
-        with col_lib:
-            arquivos_lib_ind = st.file_uploader(
-                f"Liberados - {estado_individual}", type=["xlsx", "xls", "csv"],
-                accept_multiple_files=True, key=f"up_lib_{estado_individual}"
-            )
-        with col_mont:
-            arquivos_mont_ind = st.file_uploader(
-                f"Montados - {estado_individual}", type=["xlsx", "xls", "csv"],
-                accept_multiple_files=True, key=f"up_mont_{estado_individual}"
-            )
+    opcoes_login = [e for e in ESTADOS_LABELS.keys() if e in senhas_cfg]
+    if "ADMIN" in senhas_cfg:
+        opcoes_login = ["ADMIN"] + opcoes_login
 
-        if st.button(f"Processar dados de {estado_individual}", type="primary", use_container_width=True):
-            arquivos_tag = list(arquivos_lib_ind or []) + list(arquivos_mont_ind or [])
-            if not arquivos_tag:
-                st.warning("Envie ao menos um arquivo (Liberados e/ou Montados) para processar.")
-            else:
-                mapa_estado_manual = {a.name: estado_individual for a in arquivos_tag}
-                mapa_tipo_manual = {a.name: "LIBERADOS" for a in (arquivos_lib_ind or [])}
-                mapa_tipo_manual.update({a.name: "MONTADOS" for a in (arquivos_mont_ind or [])})
-                erros, resumo_ok = processar_lote(arquivos_tag, mapa_estado_manual, mapa_tipo_manual)
-                st.session_state["erros_importacao"] = erros
-                if resumo_ok:
-                    st.success("Dados de " + estado_individual + " atualizados! " + " | ".join(resumo_ok))
-                    st.rerun()
-                elif not erros:
-                    st.warning("Nenhum arquivo valido foi processado.")
-
-    else:
-        arquivos = st.file_uploader(
-            "Arraste os arquivos de LIBERADOS e MONTADOS de todos os estados aqui — estado e tipo sao identificados automaticamente",
-            type=["xlsx", "xls", "csv"],
-            accept_multiple_files=True,
-            key="up_combinado",
+    col1, col2, col3 = st.columns([1.3, 1.3, 1])
+    with col1:
+        estado_login = st.selectbox(
+            "Quem esta enviando?", opcoes_login,
+            format_func=lambda e: "Administrador (todos os estados)" if e == "ADMIN" else ESTADOS_LABELS.get(e, e),
+            key="estado_login_sel"
         )
-
-        mapa_estado_manual = {}
-        mapa_tipo_manual = {}
-
-        if arquivos:
-            estado_indef = [a for a in arquivos if detectar_estado_pelo_nome(a.name) is None]
-            tipo_indef   = [a for a in arquivos if detectar_tipo_pelo_nome(a.name) is None]
-
-            if estado_indef or tipo_indef:
-                st.caption("Nao identifiquei automaticamente alguns arquivos — confirme manualmente:")
-                for arq in arquivos:
-                    precisa_estado = arq in estado_indef
-                    precisa_tipo = arq in tipo_indef
-                    if not precisa_estado and not precisa_tipo:
-                        continue
-                    col_nome, col_tipo, col_est = st.columns([2.4, 1, 1])
-                    with col_nome:
-                        st.write(arq.name)
-                    with col_tipo:
-                        if precisa_tipo:
-                            mapa_tipo_manual[arq.name] = st.selectbox(
-                                "Tipo", ["LIBERADOS", "MONTADOS"],
-                                key=f"tipo_{arq.name}", label_visibility="collapsed"
-                            )
-                    with col_est:
-                        if precisa_estado:
-                            mapa_estado_manual[arq.name] = st.selectbox(
-                                "Estado", list(ESTADOS_LABELS.keys()),
-                                key=f"manual_{arq.name}", label_visibility="collapsed"
-                            )
-
-        processar = st.button("Processar dados", type="primary", use_container_width=True)
-
-        if processar:
-            if not arquivos:
-                st.warning("Nenhum arquivo foi enviado. Selecione ao menos um arquivo e clique em processar novamente.")
-            else:
-                erros, resumo_ok = processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual)
-                st.session_state["erros_importacao"] = erros
-                if resumo_ok:
-                    st.success("Dados importados com sucesso! " + " | ".join(resumo_ok))
-                    st.rerun()
-                elif not erros:
-                    st.warning("Nenhum arquivo valido foi processado.")
-
-    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-    estados_para_limpar = ["Todos os estados"] + sorted(st.session_state["dados_por_estado"].keys())
-    col_limp1, col_limp2 = st.columns([2, 1])
-    with col_limp1:
-        alvo_limpeza = st.selectbox("Limpar dados carregados de:", estados_para_limpar, key="alvo_limpeza")
-    with col_limp2:
+    with col2:
+        senha_login = st.text_input("Senha", type="password", key="senha_login_input")
+    with col3:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        if st.button("Limpar", use_container_width=True):
-            if alvo_limpeza == "Todos os estados":
-                st.session_state["dados_por_estado"] = {}
+        if st.button("Entrar", use_container_width=True, type="primary"):
+            if senha_login and senha_login == senhas_cfg.get(estado_login):
+                st.session_state["usuario_logado"] = estado_login
+                st.rerun()
             else:
-                st.session_state["dados_por_estado"].pop(alvo_limpeza, None)
-            st.session_state.pop("erros_importacao", None)
-            st.rerun()
+                st.error("Senha incorreta.")
+
+with st.expander("📥 Importar dados", expanded=(not st.session_state["dados_por_estado"])):
+    usuario_logado = st.session_state.get("usuario_logado")
+
+    if not usuario_logado:
+        st.caption("Faca login com a senha do seu estado para enviar os arquivos de Liberados/Montados.")
+        tela_login_importacao()
+    else:
+        is_admin = usuario_logado == "ADMIN"
+        col_info, col_logout = st.columns([4, 1])
+        with col_info:
+            st.caption(f"Logado como: **{'Administrador' if is_admin else ESTADOS_LABELS.get(usuario_logado, usuario_logado)}**")
+        with col_logout:
+            if st.button("Sair", use_container_width=True):
+                st.session_state.pop("usuario_logado", None)
+                st.rerun()
+
+        if is_admin:
+            modo_importacao = st.radio(
+                "Modo de importacao",
+                ["Individual (um estado por vez)", "Combinada (varios arquivos/estados de uma vez)"],
+                horizontal=True,
+            )
+        else:
+            modo_importacao = "Individual (um estado por vez)"
+
+        if modo_importacao.startswith("Individual"):
+            st.caption("Reprocessar um estado atualiza a planilha compartilhada e nao apaga os demais estados ja carregados.")
+            if is_admin:
+                col_estado, col_lib, col_mont = st.columns([1, 2, 2])
+                with col_estado:
+                    estado_individual = st.selectbox(
+                        "Estado", list(ESTADOS_LABELS.keys()),
+                        format_func=lambda e: ESTADOS_LABELS[e], key="estado_individual_sel"
+                    )
+            else:
+                estado_individual = usuario_logado
+                col_lib, col_mont = st.columns(2)
+                st.write(f"Enviando dados de: **{ESTADOS_LABELS.get(estado_individual, estado_individual)}**")
+
+            with col_lib:
+                arquivos_lib_ind = st.file_uploader(
+                    f"Liberados - {estado_individual}", type=["xlsx", "xls", "csv"],
+                    accept_multiple_files=True, key=f"up_lib_{estado_individual}"
+                )
+            with col_mont:
+                arquivos_mont_ind = st.file_uploader(
+                    f"Montados - {estado_individual}", type=["xlsx", "xls", "csv"],
+                    accept_multiple_files=True, key=f"up_mont_{estado_individual}"
+                )
+
+            if st.button(f"Processar dados de {estado_individual}", type="primary", use_container_width=True):
+                arquivos_tag = list(arquivos_lib_ind or []) + list(arquivos_mont_ind or [])
+                if not arquivos_tag:
+                    st.warning("Envie ao menos um arquivo (Liberados e/ou Montados) para processar.")
+                else:
+                    mapa_estado_manual = {a.name: estado_individual for a in arquivos_tag}
+                    mapa_tipo_manual = {a.name: "LIBERADOS" for a in (arquivos_lib_ind or [])}
+                    mapa_tipo_manual.update({a.name: "MONTADOS" for a in (arquivos_mont_ind or [])})
+                    erros, resumo_ok = processar_lote(arquivos_tag, mapa_estado_manual, mapa_tipo_manual)
+                    st.session_state["erros_importacao"] = erros
+                    if resumo_ok:
+                        st.success("Dados de " + estado_individual + " atualizados! " + " | ".join(resumo_ok))
+                        st.rerun()
+                    elif not erros:
+                        st.warning("Nenhum arquivo valido foi processado.")
+
+        else:
+            arquivos = st.file_uploader(
+                "Arraste os arquivos de LIBERADOS e MONTADOS de todos os estados aqui — estado e tipo sao identificados automaticamente",
+                type=["xlsx", "xls", "csv"],
+                accept_multiple_files=True,
+                key="up_combinado",
+            )
+
+            mapa_estado_manual = {}
+            mapa_tipo_manual = {}
+
+            if arquivos:
+                estado_indef = [a for a in arquivos if detectar_estado_pelo_nome(a.name) is None]
+                tipo_indef   = [a for a in arquivos if detectar_tipo_pelo_nome(a.name) is None]
+
+                if estado_indef or tipo_indef:
+                    st.caption("Nao identifiquei automaticamente alguns arquivos — confirme manualmente:")
+                    for arq in arquivos:
+                        precisa_estado = arq in estado_indef
+                        precisa_tipo = arq in tipo_indef
+                        if not precisa_estado and not precisa_tipo:
+                            continue
+                        col_nome, col_tipo, col_est = st.columns([2.4, 1, 1])
+                        with col_nome:
+                            st.write(arq.name)
+                        with col_tipo:
+                            if precisa_tipo:
+                                mapa_tipo_manual[arq.name] = st.selectbox(
+                                    "Tipo", ["LIBERADOS", "MONTADOS"],
+                                    key=f"tipo_{arq.name}", label_visibility="collapsed"
+                                )
+                        with col_est:
+                            if precisa_estado:
+                                mapa_estado_manual[arq.name] = st.selectbox(
+                                    "Estado", list(ESTADOS_LABELS.keys()),
+                                    key=f"manual_{arq.name}", label_visibility="collapsed"
+                                )
+
+            processar = st.button("Processar dados", type="primary", use_container_width=True)
+
+            if processar:
+                if not arquivos:
+                    st.warning("Nenhum arquivo foi enviado. Selecione ao menos um arquivo e clique em processar novamente.")
+                else:
+                    erros, resumo_ok = processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual)
+                    st.session_state["erros_importacao"] = erros
+                    if resumo_ok:
+                        st.success("Dados importados com sucesso! " + " | ".join(resumo_ok))
+                        st.rerun()
+                    elif not erros:
+                        st.warning("Nenhum arquivo valido foi processado.")
+
+        if is_admin:
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+            st.caption("Apagar dados salvos (acao definitiva — remove da planilha compartilhada tambem).")
+            estados_para_limpar = ["Todos os estados"] + sorted(st.session_state["dados_por_estado"].keys())
+            col_limp1, col_limp2 = st.columns([2, 1])
+            with col_limp1:
+                alvo_limpeza = st.selectbox("Apagar dados de:", estados_para_limpar, key="alvo_limpeza")
+            with col_limp2:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                if st.button("Apagar", use_container_width=True):
+                    if alvo_limpeza == "Todos os estados":
+                        for est in list(st.session_state["dados_por_estado"].keys()):
+                            if planilha_configurada():
+                                apagar_estado_na_planilha(est)
+                        st.session_state["dados_por_estado"] = {}
+                    else:
+                        if planilha_configurada():
+                            apagar_estado_na_planilha(alvo_limpeza)
+                        st.session_state["dados_por_estado"].pop(alvo_limpeza, None)
+                    if planilha_configurada():
+                        carregar_todos_os_dados_da_planilha.clear()
+                    st.session_state.pop("erros_importacao", None)
+                    st.rerun()
 
 if st.session_state.get("erros_importacao"):
     with st.expander(f"⚠️ {len(st.session_state['erros_importacao'])} erro(s) na importacao"):
@@ -925,6 +1092,9 @@ st.markdown(f"""
 col_espaco, col_atualiza = st.columns([5, 1.1])
 with col_atualiza:
     if st.button("🔄  Atualizar Dados", use_container_width=True):
+        if planilha_configurada():
+            carregar_todos_os_dados_da_planilha.clear()
+            st.session_state["dados_por_estado"] = carregar_todos_os_dados_da_planilha()
         st.rerun()
 
 # ==================================================
