@@ -327,7 +327,7 @@ MAPA_UF_PARA_ESTADO = {
 # DATA_IMPORTACAO antes de gravar as novas — ou seja, so descarta duplicados do
 # dia corrente; o historico de dias anteriores nunca e mexido.
 GOOGLE_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-ABAS_GERAIS = {"LIBERADOS": "LIBERADOS", "MONTADOS": "MONTADOS"}
+ABAS_GERAIS = {"LIBERADOS": "LIBERADOS", "MONTADOS": "MONTADOS", "CARGAS": "CARGAS"}
 
 def planilha_configurada():
     """Verifica se as credenciais do Google Sheets foram configuradas em st.secrets."""
@@ -407,7 +407,7 @@ def salvar_estado_na_planilha(estado, tipo, df):
 def apagar_estado_na_planilha(estado, tipo=None):
     """Remove do historico geral todas as linhas do estado informado.
     tipo=None apaga em LIBERADOS e MONTADOS."""
-    for t in ([tipo] if tipo else ["LIBERADOS", "MONTADOS"]):
+    for t in ([tipo] if tipo else ["LIBERADOS", "MONTADOS", "CARGAS"]):
         df_historico = carregar_geral_da_planilha(t)
         if df_historico.empty:
             continue
@@ -431,11 +431,12 @@ def apagar_estado_na_planilha(estado, tipo=None):
 
 @st.cache_data(ttl=120, show_spinner="Carregando dados salvos da planilha...")
 def carregar_todos_os_dados_da_planilha():
-    """Le as duas abas gerais e separa o resultado por estado, para alimentar
+    """Le as tres abas gerais e separa o resultado por estado, para alimentar
     st.session_state['dados_por_estado'] como antes — cada estado enxerga so o
     proprio historico (todas as datas de importacao ja gravadas)."""
     df_lib_geral = carregar_geral_da_planilha("LIBERADOS")
     df_mont_geral = carregar_geral_da_planilha("MONTADOS")
+    df_cargas_geral = carregar_geral_da_planilha("CARGAS")
 
     dados = {}
     estados_presentes = set()
@@ -443,11 +444,14 @@ def carregar_todos_os_dados_da_planilha():
         estados_presentes |= set(df_lib_geral["ESTADO"].astype(str).unique())
     if not df_mont_geral.empty and "ESTADO" in df_mont_geral.columns:
         estados_presentes |= set(df_mont_geral["ESTADO"].astype(str).unique())
+    if not df_cargas_geral.empty and "ESTADO" in df_cargas_geral.columns:
+        estados_presentes |= set(df_cargas_geral["ESTADO"].astype(str).unique())
 
     for estado in estados_presentes:
         df_lib_e = df_lib_geral[df_lib_geral["ESTADO"].astype(str) == estado].copy() if not df_lib_geral.empty else pd.DataFrame()
         df_mont_e = df_mont_geral[df_mont_geral["ESTADO"].astype(str) == estado].copy() if not df_mont_geral.empty else pd.DataFrame()
-        dados[estado] = {"liberados": df_lib_e, "montados": df_mont_e}
+        df_cargas_e = df_cargas_geral[df_cargas_geral["ESTADO"].astype(str) == estado].copy() if not df_cargas_geral.empty else pd.DataFrame()
+        dados[estado] = {"liberados": df_lib_e, "montados": df_mont_e, "cargas": df_cargas_e}
     return dados
 
 def parse_numero_brl(valor):
@@ -539,6 +543,64 @@ def tratar_dataframe_montados(df):
         df["NUMPED"] = normalizar_numped(df["NUMPED"])
         df = df[df["NUMPED"] != ""]
         df = df.drop_duplicates(subset=["NUMPED"])
+
+    df = df.reset_index(drop=True)
+    return df
+
+# Mapeamento das colunas da planilha de CARGAS (rotas do RoadNet) para os nomes padrao do sistema
+COLUNAS_CARGAS = {
+    "ID":                       "IDROTA",
+    "Descrição":                "DESCRICAOROTA",
+    "Número de paradas":        "NUMPARADAS",
+    "Número de Ordens":         "NUMORDENS",
+    "Entrega Total Peso":       "PESOBRUTOTOT",
+    "Entrega Total Valor":      "VLTOTAL",
+    "Capacidade Peso":          "CAPACIDADEPESO",
+    "Equipamento":              "PLACA",
+    "Distância total":          "DISTANCIATOTAL",
+    "Tipos de equipamento":     "TIPOEQUIPAMENTO",
+    "Sessão de roteirização":   "SESSAOROTEIRIZACAO",
+    "Estado":                   "STATUS_ROTA",
+    "Horário Criado":           "DATA",
+}
+
+def tratar_dataframe_cargas(df):
+    """Limpeza dedicada para a planilha de CARGAS (rotas/equipamentos do RoadNet).
+    Usa colunas totalmente diferentes das de Liberados/Montados."""
+    df = df.copy()
+    df = df.rename(columns={k: v for k, v in COLUNAS_CARGAS.items() if k in df.columns})
+    df = df.fillna("")
+
+    # A ultima linha do relatorio costuma ser uma linha de TOTAL (sem descricao da rota) — descarta.
+    if "DESCRICAOROTA" in df.columns:
+        df = df[df["DESCRICAOROTA"].astype(str).str.strip() != ""]
+
+    for col in ["NUMPARADAS", "NUMORDENS"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(",", "."), errors="coerce").fillna(0).astype(int)
+
+    for col in ["PESOBRUTOTOT", "VLTOTAL", "CAPACIDADEPESO", "DISTANCIATOTAL"]:
+        if col in df.columns:
+            df[col] = df[col].apply(parse_numero_brl)
+
+    if "DATA" in df.columns:
+        try:
+            df["DATA"] = df["DATA"].astype(str).str.replace(r"\s+[A-Z]{2,4}$", "", regex=True)
+            df["DATA"] = pd.to_datetime(df["DATA"], errors="coerce", dayfirst=True)
+        except Exception:
+            pass
+
+    cols_texto = ["IDROTA", "DESCRICAOROTA", "PLACA", "TIPOEQUIPAMENTO", "SESSAOROTEIRIZACAO", "STATUS_ROTA"]
+    for col in cols_texto:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+
+    if "TIPOEQUIPAMENTO" in df.columns:
+        df["TIPOEQUIPAMENTO"] = df["TIPOEQUIPAMENTO"].replace("", "Nao informado")
+
+    if "IDROTA" in df.columns:
+        df = df[df["IDROTA"] != ""]
+        df = df.drop_duplicates(subset=["IDROTA"])
 
     df = df.reset_index(drop=True)
     return df
@@ -848,6 +910,7 @@ ITENS_MENU = [
     ("Dashboard",      "📊"),
     ("Pedidos",        "📦"),
     ("Estados",        "🗺️"),
+    ("Cargas",         "🚛"),
     ("Mapas",          "📍"),
     ("Relatorios",     "📈"),
     ("Alertas",        "🔔"),
@@ -992,6 +1055,8 @@ def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual):
             df_arquivo = ler_arquivo_upload(arquivo)
             if tipo == "MONTADOS":
                 df_arquivo = tratar_dataframe_montados(df_arquivo)
+            elif tipo == "CARGAS":
+                df_arquivo = tratar_dataframe_cargas(df_arquivo)
             else:
                 df_arquivo = tratar_dataframe(df_arquivo)
             df_arquivo["ESTADO"] = estado
@@ -1002,14 +1067,14 @@ def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual):
     resumo_ok = []
     for (estado, tipo), lista_dfs in agrupados.items():
         df_concat = pd.concat(lista_dfs, ignore_index=True)
-        chave = "liberados" if tipo == "LIBERADOS" else "montados"
+        chave = {"LIBERADOS": "liberados", "MONTADOS": "montados", "CARGAS": "cargas"}[tipo]
         st.session_state["dados_por_estado"].setdefault(estado, {})[chave] = df_concat
         if planilha_configurada():
             try:
                 salvar_estado_na_planilha(estado, tipo, df_concat)
             except Exception as e:
                 erros.append(f"Nao foi possivel salvar {estado} ({tipo}) na planilha compartilhada: {e}")
-        resumo_ok.append(f"{estado} ({tipo.title()}): {len(df_concat)} pedido(s)")
+        resumo_ok.append(f"{estado} ({tipo.title()}): {len(df_concat)} registro(s)")
 
     if planilha_configurada() and resumo_ok:
         carregar_todos_os_dados_da_planilha.clear()
@@ -1128,6 +1193,38 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
                 elif not erros:
                     st.warning("Nenhum arquivo valido foi processado.")
 
+    st.markdown("<hr style='margin:10px 0; border-color: rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
+    st.markdown('<p class="filter-title">🚛 Cargas (rotas)</p>', unsafe_allow_html=True)
+    st.caption("Relatorio de rotas/equipamentos do RoadNet (ex: AM.xlsx). Segue o mesmo historico por data de importacao.")
+
+    if is_admin:
+        estado_cargas = st.selectbox(
+            "Estado", list(ESTADOS_LABELS.keys()),
+            format_func=lambda e: ESTADOS_LABELS[e], key="estado_cargas_sel"
+        )
+    else:
+        estado_cargas = usuario_logado
+        st.write(f"Enviando cargas de: **{ESTADOS_LABELS.get(estado_cargas, estado_cargas)}**")
+
+    arquivo_cargas = st.file_uploader(
+        f"Cargas - {estado_cargas}", type=["xlsx", "xls", "csv"],
+        accept_multiple_files=True, key=f"up_cargas_{estado_cargas}"
+    )
+
+    if st.button(f"Processar cargas de {estado_cargas}", type="primary", use_container_width=True, key="btn_processar_cargas"):
+        if not arquivo_cargas:
+            st.warning("Envie ao menos um arquivo de cargas para processar.")
+        else:
+            mapa_estado_manual_c = {a.name: estado_cargas for a in arquivo_cargas}
+            mapa_tipo_manual_c = {a.name: "CARGAS" for a in arquivo_cargas}
+            erros, resumo_ok = processar_lote(arquivo_cargas, mapa_estado_manual_c, mapa_tipo_manual_c)
+            st.session_state["erros_importacao"] = erros
+            if resumo_ok:
+                st.success("Cargas de " + estado_cargas + " atualizadas! " + " | ".join(resumo_ok))
+                st.rerun()
+            elif not erros:
+                st.warning("Nenhum arquivo valido foi processado.")
+
     if is_admin:
         st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
         st.caption("Apagar dados salvos (acao definitiva — remove da planilha compartilhada tambem).")
@@ -1178,6 +1275,7 @@ if not dados_visiveis():
 
 df = montar_df_geral("liberados")
 df_montados_bruto = montar_df_geral("montados")
+df_cargas_bruto = montar_df_geral("cargas")
 
 if df.empty:
     st.warning("Os arquivos importados nao geraram nenhum pedido de LIBERADOS valido. Confira os arquivos e tente novamente.")
@@ -1277,6 +1375,14 @@ if not df_montados_filtrado.empty:
         df_montados_filtrado = df_montados_filtrado[df_montados_filtrado["CIDADE"].isin(cidades_sel)]
     if datas_sel and "DATA_IMPORTACAO" in df_montados_filtrado.columns:
         df_montados_filtrado = df_montados_filtrado[df_montados_filtrado["DATA_IMPORTACAO"].astype(str).isin(datas_sel)]
+
+# Mesmos filtros de Estado/Data aplicados as CARGAS (nao tem coluna CIDADE)
+df_cargas_filtrado = df_cargas_bruto.copy()
+if not df_cargas_filtrado.empty:
+    if estados_sel and "ESTADO" in df_cargas_filtrado.columns:
+        df_cargas_filtrado = df_cargas_filtrado[df_cargas_filtrado["ESTADO"].isin(estados_sel)]
+    if datas_sel and "DATA_IMPORTACAO" in df_cargas_filtrado.columns:
+        df_cargas_filtrado = df_cargas_filtrado[df_cargas_filtrado["DATA_IMPORTACAO"].astype(str).isin(datas_sel)]
 
 # ==================================================
 # KPIs PREMIUM
@@ -1579,6 +1685,110 @@ def renderizar_montados():
         st.markdown(tabela_cmp, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
+def renderizar_cargas(df_cargas, titulo_geo="por Estado", mostrar_estado=True):
+    """Renderiza os indicadores de CARGAS (rotas/equipamentos do RoadNet):
+    tipo de equipamentos, quantidade de rotas, quantidade de rotas por tipo de
+    equipamento e medias de paradas. Recebe o DataFrame ja filtrado (geral ou de
+    um unico estado)."""
+    if df_cargas.empty:
+        st.markdown('<div class="glass-box">', unsafe_allow_html=True)
+        st.write("Nenhum arquivo de **CARGAS** foi importado ainda. Abra 'Importar dados' no topo da pagina, "
+                  "na secao '🚛 Cargas (rotas)', e envie o relatorio de rotas do RoadNet (ex: AM.xlsx).")
+        st.markdown('</div>', unsafe_allow_html=True)
+        return
+
+    total_rotas = len(df_cargas)
+    total_paradas = df_cargas["NUMPARADAS"].sum() if "NUMPARADAS" in df_cargas.columns else 0
+    media_paradas = df_cargas["NUMPARADAS"].mean() if "NUMPARADAS" in df_cargas.columns and total_rotas else 0
+    total_ordens = df_cargas["NUMORDENS"].sum() if "NUMORDENS" in df_cargas.columns else 0
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown(kpi_card_premium("🚛", "Total de Rotas", fmt_int(total_rotas), "No periodo filtrado", []), unsafe_allow_html=True)
+    with c2:
+        st.markdown(kpi_card_premium("🛑", "Media de Paradas por Rota", f"{media_paradas:.1f}", f"{fmt_int(int(total_paradas))} paradas no total", []), unsafe_allow_html=True)
+    with c3:
+        st.markdown(kpi_card_premium("📦", "Total de Ordens nas Rotas", fmt_int(int(total_ordens)), "No periodo filtrado", []), unsafe_allow_html=True)
+
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+    col_g1, col_g2 = st.columns(2)
+
+    with col_g1:
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        st.markdown('<p class="painel-titulo"><span class="ic">🚚</span>Tipo de Equipamentos</p>', unsafe_allow_html=True)
+        if "TIPOEQUIPAMENTO" in df_cargas.columns:
+            tipo_df = df_cargas.groupby("TIPOEQUIPAMENTO").agg(Rotas=("IDROTA", "count")).reset_index().sort_values("Rotas", ascending=False)
+            fig_tipo = px.pie(tipo_df, names="TIPOEQUIPAMENTO", values="Rotas", hole=0.45,
+                               color_discrete_sequence=GRADIENTE_LARANJA)
+            fig_tipo.update_traces(textposition="inside", textinfo="percent+label",
+                                    hovertemplate="<b>%{label}</b><br>Rotas: %{value}<extra></extra>")
+            aplicar_tema_grafico(fig_tipo)
+            st.plotly_chart(fig_tipo, use_container_width=True)
+        else:
+            st.info("Sem dados de tipo de equipamento.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_g2:
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        rotulo_geo = "Estado" if mostrar_estado else "Tipo de Equipamento"
+        st.markdown(f'<p class="painel-titulo"><span class="ic">📊</span>Quantidade de Rotas {titulo_geo}</p>', unsafe_allow_html=True)
+        if mostrar_estado and "ESTADO" in df_cargas.columns:
+            qtd_df = df_cargas.groupby("ESTADO").agg(Rotas=("IDROTA", "count")).reset_index().sort_values("Rotas")
+            fig_qtd = px.bar(qtd_df, x="Rotas", y="ESTADO", orientation="h", color="Rotas",
+                              color_continuous_scale=GRADIENTE_LARANJA)
+        elif "TIPOEQUIPAMENTO" in df_cargas.columns:
+            qtd_df = df_cargas.groupby("TIPOEQUIPAMENTO").agg(Rotas=("IDROTA", "count")).reset_index().sort_values("Rotas")
+            fig_qtd = px.bar(qtd_df, x="Rotas", y="TIPOEQUIPAMENTO", orientation="h", color="Rotas",
+                              color_continuous_scale=GRADIENTE_LARANJA)
+        else:
+            fig_qtd = None
+        if fig_qtd is not None:
+            fig_qtd.update_traces(marker_line_width=0, hovertemplate="<b>%{y}</b><br>Rotas: %{x}<extra></extra>")
+            fig_qtd.update_layout(yaxis=dict(autorange="reversed", title=""), xaxis=dict(title=""), coloraxis_showscale=False)
+            aplicar_tema_grafico(fig_qtd)
+            st.plotly_chart(fig_qtd, use_container_width=True)
+        else:
+            st.info("Sem dados suficientes.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    col_g3, col_g4 = st.columns(2)
+
+    with col_g3:
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        st.markdown('<p class="painel-titulo"><span class="ic">📈</span>Rotas por Tipo de Equipamento</p>', unsafe_allow_html=True)
+        if "TIPOEQUIPAMENTO" in df_cargas.columns and "ESTADO" in df_cargas.columns:
+            cruzado_df = df_cargas.groupby(["TIPOEQUIPAMENTO", "ESTADO"]).agg(Rotas=("IDROTA", "count")).reset_index()
+            fig_cruz = px.bar(cruzado_df, x="TIPOEQUIPAMENTO", y="Rotas", color="ESTADO", barmode="group",
+                               color_discrete_sequence=GRADIENTE_LARANJA + ["#60A5FA", "#34D399", "#F472B6"])
+            fig_cruz.update_traces(marker_line_width=0)
+            fig_cruz.update_layout(xaxis=dict(title=""), yaxis=dict(title="Rotas"))
+            aplicar_tema_grafico(fig_cruz)
+            st.plotly_chart(fig_cruz, use_container_width=True)
+        else:
+            st.info("Sem dados suficientes.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_g4:
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        st.markdown('<p class="painel-titulo"><span class="ic">🛑</span>Media de Paradas por Tipo de Equipamento</p>', unsafe_allow_html=True)
+        if "TIPOEQUIPAMENTO" in df_cargas.columns and "NUMPARADAS" in df_cargas.columns:
+            paradas_df = df_cargas.groupby("TIPOEQUIPAMENTO").agg(MediaParadas=("NUMPARADAS", "mean"), Rotas=("IDROTA", "count")).reset_index().sort_values("MediaParadas")
+            fig_paradas = px.bar(paradas_df, x="MediaParadas", y="TIPOEQUIPAMENTO", orientation="h",
+                                  color="MediaParadas", color_continuous_scale=GRADIENTE_LARANJA, custom_data=["Rotas"])
+            fig_paradas.update_traces(
+                marker_line_width=0,
+                text=paradas_df["MediaParadas"].round(1),
+                textposition="outside",
+                hovertemplate="<b>%{y}</b><br>Media de paradas: %{x:.1f}<br>Rotas: %{customdata[0]}<extra></extra>",
+            )
+            fig_paradas.update_layout(yaxis=dict(autorange="reversed", title=""), xaxis=dict(title=""), coloraxis_showscale=False)
+            aplicar_tema_grafico(fig_paradas)
+            st.plotly_chart(fig_paradas, use_container_width=True)
+        else:
+            st.info("Sem dados suficientes.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
 def renderizar_mapa_interativo(chave, mostrar_titulo=True, altura=480):
     if mostrar_titulo:
         st.subheader("Mapa do Brasil - Valor por Estado")
@@ -1709,6 +1919,7 @@ def renderizar_pagina_estado(estado):
     dados_estado = st.session_state["dados_por_estado"].get(estado, {})
     df_lib_estado = dados_estado.get("liberados", pd.DataFrame())
     df_mont_estado = dados_estado.get("montados", pd.DataFrame())
+    df_cargas_estado = dados_estado.get("cargas", pd.DataFrame())
 
     label_estado = ESTADOS_LABELS.get(estado, estado)
     st.markdown(f"""
@@ -1770,6 +1981,10 @@ def renderizar_pagina_estado(estado):
     if not df_mont_f.empty and datas_sel_e and "DATA_IMPORTACAO" in df_mont_f.columns:
         df_mont_f = df_mont_f[df_mont_f["DATA_IMPORTACAO"].astype(str).isin(datas_sel_e)]
 
+    df_cargas_f = df_cargas_estado.copy()
+    if not df_cargas_f.empty and datas_sel_e and "DATA_IMPORTACAO" in df_cargas_f.columns:
+        df_cargas_f = df_cargas_f[df_cargas_f["DATA_IMPORTACAO"].astype(str).isin(datas_sel_e)]
+
     total_pedidos_e = len(df_lib_f)
     total_valor_e   = df_lib_f["VLTOTAL"].sum()      if "VLTOTAL" in df_lib_f.columns else 0
     total_peso_e    = df_lib_f["PESOBRUTOTOT"].sum() if "PESOBRUTOTOT" in df_lib_f.columns else 0
@@ -1784,7 +1999,7 @@ def renderizar_pagina_estado(estado):
 
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-    tabs_estado = st.tabs(["Por Municipio", "Por Praca", "Detalhes dos Pedidos", "Montados x Liberados"])
+    tabs_estado = st.tabs(["Por Municipio", "Por Praca", "Detalhes dos Pedidos", "Montados x Liberados", "Cargas"])
 
     with tabs_estado[0]:
         if df_lib_f.empty:
@@ -1868,6 +2083,9 @@ def renderizar_pagina_estado(estado):
                 st.markdown(f"**Pedidos liberados de {label_estado} que ainda nao foram montados:**")
                 st.markdown(tabela_premium_html(formatar_tabela(df_pendentes_e[[c for c in COLUNAS_EXIB_E if c in df_pendentes_e.columns]])), unsafe_allow_html=True)
 
+    with tabs_estado[4]:
+        renderizar_cargas(df_cargas_f, mostrar_estado=False)
+
 # ==================================================
 # ROTEAMENTO DE PAGINAS (SIDEBAR)
 # ==================================================
@@ -1892,6 +2110,9 @@ else:
 
     elif pagina_ativa == "Estados":
         renderizar_por_estados()
+
+    elif pagina_ativa == "Cargas":
+        renderizar_cargas(df_cargas_filtrado, titulo_geo="por Estado", mostrar_estado=is_admin)
 
     elif pagina_ativa == "Mapas":
         renderizar_mapa()
