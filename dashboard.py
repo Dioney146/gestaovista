@@ -298,7 +298,8 @@ ESTADOS_LABELS = {
     "AM":    "Amazonas (AM)",
     "BA":    "Bahia (BA)",
     "DF":    "Distrito Federal (DF)",
-    "MG.ES": "Minas Gerais / Espirito Santo (MG.ES)",
+    "MG":    "Minas Gerais (MG)",
+    "ES":    "Espirito Santo (ES)",
     "SP":    "Sao Paulo (SP)",
     "SPW":   "Sao Paulo WFS (SPW)",
 }
@@ -308,17 +309,25 @@ MAPA_UF_PARA_ESTADO = {
     "AM": ["AM"],
     "BA": ["BA"],
     "DF": ["DF"],
-    "MG": ["MG.ES"],
+    "MG": ["MG"],
+    "ES": ["ES"],
     "SP": ["SP", "SPW"],
 }
 
 # ==================================================
 # PERSISTENCIA COMPARTILHADA (GOOGLE SHEETS)
 # ==================================================
-# Cada estado/tipo vira uma aba propria na planilha, ex: "AM_LIBERADOS", "AM_MONTADOS".
-# A planilha e a fonte unica de verdade: todo mundo que abre o site ve os mesmos dados,
-# e quem sobe um arquivo novo atualiza a planilha para todo mundo.
+# Apenas DUAS abas gerais na planilha: "LIBERADOS" e "MONTADOS", com todos os
+# estados juntos e uma coluna DATA_IMPORTACAO marcando o dia em que cada leva de
+# pedidos foi importada. Isso cria um historico: cada dia de importacao fica
+# guardado, em vez de sobrescrever o anterior.
+#
+# Reimportar o mesmo estado no mesmo dia (ex: corrigiu o arquivo e subiu de novo)
+# remove automaticamente as linhas antigas daquele estado com a MESMA
+# DATA_IMPORTACAO antes de gravar as novas — ou seja, so descarta duplicados do
+# dia corrente; o historico de dias anteriores nunca e mexido.
 GOOGLE_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+ABAS_GERAIS = {"LIBERADOS": "LIBERADOS", "MONTADOS": "MONTADOS"}
 
 def planilha_configurada():
     """Verifica se as credenciais do Google Sheets foram configuradas em st.secrets."""
@@ -335,49 +344,18 @@ def obter_cliente_planilha():
 def obter_planilha():
     return obter_cliente_planilha().open_by_key(st.secrets["GOOGLE_SHEET_ID"])
 
-def nome_aba(estado, tipo):
-    return f"{estado.replace('.', '_')}_{tipo}"
-
-def salvar_estado_na_planilha(estado, tipo, df):
-    """Substitui o conteudo da aba do estado/tipo pelo DataFrame atual (snapshot mais recente)."""
+def obter_ou_criar_aba_geral(tipo):
     planilha = obter_planilha()
-    aba_alvo = nome_aba(estado, tipo)
-
-    df_export = df.copy()
-    for col in ["DATA", "DTENTREGA"]:
-        if col in df_export.columns and pd.api.types.is_datetime64_any_dtype(df_export[col]):
-            df_export[col] = df_export[col].dt.strftime("%Y-%m-%d").fillna("")
-    df_export = df_export.fillna("").astype(str)
-
-    valores = [df_export.columns.tolist()] + df_export.values.tolist()
-
+    nome = ABAS_GERAIS[tipo]
     try:
-        aba = planilha.worksheet(aba_alvo)
-        aba.clear()
+        return planilha.worksheet(nome)
     except gspread.WorksheetNotFound:
-        aba = planilha.add_worksheet(
-            title=aba_alvo,
-            rows=str(max(len(valores) + 20, 200)),
-            cols=str(max(len(df_export.columns) + 2, 15)),
-        )
-    aba.update(values=valores)
+        return planilha.add_worksheet(title=nome, rows="200", cols="20")
 
-def apagar_estado_na_planilha(estado, tipo=None):
-    """Limpa a(s) aba(s) do estado na planilha. tipo=None apaga LIBERADOS e MONTADOS."""
-    planilha = obter_planilha()
-    for t in ([tipo] if tipo else ["LIBERADOS", "MONTADOS"]):
-        try:
-            planilha.worksheet(nome_aba(estado, t)).clear()
-        except gspread.WorksheetNotFound:
-            pass
-
-def carregar_estado_da_planilha(estado, tipo):
-    planilha = obter_planilha()
-    try:
-        aba = planilha.worksheet(nome_aba(estado, tipo))
-    except gspread.WorksheetNotFound:
-        return pd.DataFrame()
-
+def carregar_geral_da_planilha(tipo):
+    """Le a aba geral inteira (LIBERADOS ou MONTADOS) — todos os estados, todas as
+    datas de importacao ja gravadas."""
+    aba = obter_ou_criar_aba_geral(tipo)
     valores = aba.get_all_values()
     if len(valores) < 2:
         return pd.DataFrame()
@@ -389,17 +367,85 @@ def carregar_estado_da_planilha(estado, tipo):
     for col in ["DATA", "DTENTREGA"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce")
-    df["ESTADO"] = estado
     return df
+
+def salvar_estado_na_planilha(estado, tipo, df):
+    """Acrescenta os pedidos de hoje ao historico geral (aba LIBERADOS ou MONTADOS),
+    marcando a data de importacao. Remove antes as linhas do MESMO estado com a
+    MESMA data de importacao, para nao duplicar caso o arquivo seja reenviado no
+    mesmo dia."""
+    hoje = time.strftime("%Y-%m-%d")
+
+    df_novo = df.copy()
+    df_novo["DATA_IMPORTACAO"] = hoje
+
+    df_historico = carregar_geral_da_planilha(tipo)
+    if not df_historico.empty:
+        mascara_manter = ~(
+            (df_historico["ESTADO"].astype(str) == estado) &
+            (df_historico["DATA_IMPORTACAO"].astype(str) == hoje)
+        )
+        df_historico = df_historico[mascara_manter]
+        df_final = pd.concat([df_historico, df_novo], ignore_index=True)
+    else:
+        df_final = df_novo
+
+    df_export = df_final.copy()
+    for col in ["DATA", "DTENTREGA"]:
+        if col in df_export.columns and pd.api.types.is_datetime64_any_dtype(df_export[col]):
+            df_export[col] = df_export[col].dt.strftime("%Y-%m-%d").fillna("")
+    df_export = df_export.fillna("").astype(str)
+
+    valores = [df_export.columns.tolist()] + df_export.values.tolist()
+    aba = obter_ou_criar_aba_geral(tipo)
+    aba.clear()
+    aba.resize(rows=max(len(valores) + 20, 200), cols=max(len(df_export.columns) + 2, 15))
+    aba.update(values=valores)
+
+def apagar_estado_na_planilha(estado, tipo=None):
+    """Remove do historico geral todas as linhas do estado informado.
+    tipo=None apaga em LIBERADOS e MONTADOS."""
+    for t in ([tipo] if tipo else ["LIBERADOS", "MONTADOS"]):
+        df_historico = carregar_geral_da_planilha(t)
+        if df_historico.empty:
+            continue
+        df_restante = df_historico[df_historico["ESTADO"].astype(str) != estado]
+        if len(df_restante) == len(df_historico):
+            continue
+
+        df_export = df_restante.copy()
+        for col in ["DATA", "DTENTREGA"]:
+            if col in df_export.columns and pd.api.types.is_datetime64_any_dtype(df_export[col]):
+                df_export[col] = df_export[col].dt.strftime("%Y-%m-%d").fillna("")
+        df_export = df_export.fillna("").astype(str)
+
+        aba = obter_ou_criar_aba_geral(t)
+        aba.clear()
+        if df_export.empty:
+            continue
+        valores = [df_export.columns.tolist()] + df_export.values.tolist()
+        aba.resize(rows=max(len(valores) + 20, 200), cols=max(len(df_export.columns) + 2, 15))
+        aba.update(values=valores)
 
 @st.cache_data(ttl=120, show_spinner="Carregando dados salvos da planilha...")
 def carregar_todos_os_dados_da_planilha():
+    """Le as duas abas gerais e separa o resultado por estado, para alimentar
+    st.session_state['dados_por_estado'] como antes — cada estado enxerga so o
+    proprio historico (todas as datas de importacao ja gravadas)."""
+    df_lib_geral = carregar_geral_da_planilha("LIBERADOS")
+    df_mont_geral = carregar_geral_da_planilha("MONTADOS")
+
     dados = {}
-    for estado in ESTADOS_LABELS.keys():
-        df_lib = carregar_estado_da_planilha(estado, "LIBERADOS")
-        df_mont = carregar_estado_da_planilha(estado, "MONTADOS")
-        if not df_lib.empty or not df_mont.empty:
-            dados[estado] = {"liberados": df_lib, "montados": df_mont}
+    estados_presentes = set()
+    if not df_lib_geral.empty and "ESTADO" in df_lib_geral.columns:
+        estados_presentes |= set(df_lib_geral["ESTADO"].astype(str).unique())
+    if not df_mont_geral.empty and "ESTADO" in df_mont_geral.columns:
+        estados_presentes |= set(df_mont_geral["ESTADO"].astype(str).unique())
+
+    for estado in estados_presentes:
+        df_lib_e = df_lib_geral[df_lib_geral["ESTADO"].astype(str) == estado].copy() if not df_lib_geral.empty else pd.DataFrame()
+        df_mont_e = df_mont_geral[df_mont_geral["ESTADO"].astype(str) == estado].copy() if not df_mont_geral.empty else pd.DataFrame()
+        dados[estado] = {"liberados": df_lib_e, "montados": df_mont_e}
     return dados
 
 def parse_numero_brl(valor):
@@ -523,8 +569,10 @@ def detectar_estado_pelo_nome(nome_arquivo):
 
     if tem(r'(?<![A-Z0-9])(WFS|SPW)(?![A-Z0-9])'):
         return "SPW"
-    if tem(r'MG[\.\-_ ]?ES') or "MINAS GERAIS" in nome:
-        return "MG.ES"
+    if tem(r'(?<![A-Z0-9])ES(?![A-Z0-9])') or "ESPIRITO SANTO" in nome:
+        return "ES"
+    if tem(r'(?<![A-Z0-9])MG(?![A-Z0-9])') or "MINAS GERAIS" in nome:
+        return "MG"
     if tem(r'D[\.\-_ ]?F(?![A-Z0-9])') or "DISTRITO FEDERAL" in nome:
         return "DF"
     if tem(r'(?<![A-Z0-9])BA(?![A-Z0-9])') or "BAHIA" in nome:
@@ -930,7 +978,7 @@ with st.expander("📥 Importar dados", expanded=(not st.session_state["dados_po
             modo_importacao = "Individual (um estado por vez)"
 
         if modo_importacao.startswith("Individual"):
-            st.caption("Reprocessar um estado atualiza a planilha compartilhada e nao apaga os demais estados ja carregados.")
+            st.caption("Cada importacao vira um novo registro no historico (marcado com a data de hoje). Reimportar o mesmo estado no mesmo dia so substitui os dados de hoje — o historico de dias anteriores e de outros estados nao e afetado.")
             if is_admin:
                 col_estado, col_lib, col_mont = st.columns([1, 2, 2])
                 with col_estado:
@@ -1105,7 +1153,7 @@ estados_carregados = sorted(df["ESTADO"].unique().tolist()) if "ESTADO" in df.co
 st.markdown('<div class="glass-box">', unsafe_allow_html=True)
 st.markdown('<p class="filter-title">🔎 Filtros</p>', unsafe_allow_html=True)
 
-col_f0, col_f1, col_f3, col_f4 = st.columns([1.3, 2, 1, 1])
+col_f0, col_f1, col_f2, col_f3, col_f4 = st.columns([1.2, 1.7, 1.3, 1, 1])
 
 with col_f0:
     estados_sel = st.multiselect("🌎 Estado", options=estados_carregados, placeholder="Todos os estados",
@@ -1114,6 +1162,13 @@ with col_f0:
 with col_f1:
     cidades_disp = sorted(df["CIDADE"].astype(str).unique().tolist()) if "CIDADE" in df.columns else []
     cidades_sel  = st.multiselect("🏙️ Cidade", options=cidades_disp, placeholder="Todas as cidades")
+
+with col_f2:
+    if "DATA_IMPORTACAO" in df.columns:
+        datas_disp = sorted(df["DATA_IMPORTACAO"].astype(str).unique().tolist(), reverse=True)
+        datas_sel = st.multiselect("🗓️ Data de Importacao", options=datas_disp, placeholder="Todo o historico")
+    else:
+        datas_sel = []
 
 with col_f3:
     if "POSICAO" in df.columns:
@@ -1139,18 +1194,22 @@ if estados_sel:
     df_filtrado = df_filtrado[df_filtrado["ESTADO"].isin(estados_sel)]
 if cidades_sel:
     df_filtrado = df_filtrado[df_filtrado["CIDADE"].isin(cidades_sel)]
+if datas_sel and "DATA_IMPORTACAO" in df_filtrado.columns:
+    df_filtrado = df_filtrado[df_filtrado["DATA_IMPORTACAO"].astype(str).isin(datas_sel)]
 if posicao_sel != "Todas" and "POSICAO" in df_filtrado.columns:
     df_filtrado = df_filtrado[df_filtrado["POSICAO"].astype(str) == posicao_sel]
 if tipo_sel != "Todos" and "TIPOVENDA" in df_filtrado.columns:
     df_filtrado = df_filtrado[df_filtrado["TIPOVENDA"].astype(str) == tipo_sel]
 
-# Mesmos filtros de Estado/Cidade aplicados aos MONTADOS (quando importados)
+# Mesmos filtros de Estado/Cidade/Data aplicados aos MONTADOS (quando importados)
 df_montados_filtrado = df_montados_bruto.copy()
 if not df_montados_filtrado.empty:
     if estados_sel and "ESTADO" in df_montados_filtrado.columns:
         df_montados_filtrado = df_montados_filtrado[df_montados_filtrado["ESTADO"].isin(estados_sel)]
     if cidades_sel and "CIDADE" in df_montados_filtrado.columns:
         df_montados_filtrado = df_montados_filtrado[df_montados_filtrado["CIDADE"].isin(cidades_sel)]
+    if datas_sel and "DATA_IMPORTACAO" in df_montados_filtrado.columns:
+        df_montados_filtrado = df_montados_filtrado[df_montados_filtrado["DATA_IMPORTACAO"].astype(str).isin(datas_sel)]
 
 # ==================================================
 # KPIs PREMIUM
@@ -1284,7 +1343,7 @@ def renderizar_por_praca():
 def renderizar_detalhes():
     st.subheader("Todos os Pedidos")
     COLUNAS_EXIB = [c for c in [
-        "NUMPED", "ESTADO", "DATA", "NOMECLIENTE", "CIDADE", "PRACA",
+        "NUMPED", "ESTADO", "DATA_IMPORTACAO", "DATA", "NOMECLIENTE", "CIDADE", "PRACA",
         "NOMESUP", "NOMERCA", "POSICAO", "TIPOVENDA",
         "VLTOTAL", "PESOBRUTOTOT", "DTENTREGA",
         "NUMCARREGAMENTO", "PLACA", "DESTINO"
@@ -1604,17 +1663,23 @@ def renderizar_pagina_estado(estado):
 
     st.markdown('<div class="glass-box">', unsafe_allow_html=True)
     st.markdown('<p class="filter-title">🔎 Filtros do estado</p>', unsafe_allow_html=True)
-    col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
+    col_c1, col_c2, col_c3, col_c4 = st.columns([1.6, 1.2, 1, 1])
     with col_c1:
         cidades_disp_e = sorted(df_lib_estado["CIDADE"].astype(str).unique().tolist()) if "CIDADE" in df_lib_estado.columns else []
         cidades_sel_e = st.multiselect("🏙️ Cidade", options=cidades_disp_e, placeholder="Todas as cidades", key=f"cidade_{estado}")
     with col_c2:
+        if "DATA_IMPORTACAO" in df_lib_estado.columns:
+            datas_disp_e = sorted(df_lib_estado["DATA_IMPORTACAO"].astype(str).unique().tolist(), reverse=True)
+            datas_sel_e = st.multiselect("🗓️ Data Importacao", options=datas_disp_e, placeholder="Todo o historico", key=f"data_{estado}")
+        else:
+            datas_sel_e = []
+    with col_c3:
         if "POSICAO" in df_lib_estado.columns:
             posicoes_disp_e = ["Todas"] + sorted(df_lib_estado["POSICAO"].astype(str).unique().tolist())
             posicao_sel_e = st.selectbox("📋 Posicao", posicoes_disp_e, key=f"posicao_{estado}")
         else:
             posicao_sel_e = "Todas"
-    with col_c3:
+    with col_c4:
         if "TIPOVENDA" in df_lib_estado.columns:
             tipos_disp_e = ["Todos"] + sorted(df_lib_estado["TIPOVENDA"].astype(str).unique().tolist())
             tipo_sel_e = st.selectbox("🏷️ Tipo Venda", tipos_disp_e, key=f"tipovenda_{estado}")
@@ -1625,6 +1690,8 @@ def renderizar_pagina_estado(estado):
     df_lib_f = df_lib_estado.copy()
     if cidades_sel_e:
         df_lib_f = df_lib_f[df_lib_f["CIDADE"].isin(cidades_sel_e)]
+    if datas_sel_e and "DATA_IMPORTACAO" in df_lib_f.columns:
+        df_lib_f = df_lib_f[df_lib_f["DATA_IMPORTACAO"].astype(str).isin(datas_sel_e)]
     if posicao_sel_e != "Todas" and "POSICAO" in df_lib_f.columns:
         df_lib_f = df_lib_f[df_lib_f["POSICAO"].astype(str) == posicao_sel_e]
     if tipo_sel_e != "Todos" and "TIPOVENDA" in df_lib_f.columns:
@@ -1633,6 +1700,8 @@ def renderizar_pagina_estado(estado):
     df_mont_f = df_mont_estado.copy()
     if not df_mont_f.empty and cidades_sel_e and "CIDADE" in df_mont_f.columns:
         df_mont_f = df_mont_f[df_mont_f["CIDADE"].isin(cidades_sel_e)]
+    if not df_mont_f.empty and datas_sel_e and "DATA_IMPORTACAO" in df_mont_f.columns:
+        df_mont_f = df_mont_f[df_mont_f["DATA_IMPORTACAO"].astype(str).isin(datas_sel_e)]
 
     total_pedidos_e = len(df_lib_f)
     total_valor_e   = df_lib_f["VLTOTAL"].sum()      if "VLTOTAL" in df_lib_f.columns else 0
@@ -1683,7 +1752,7 @@ def renderizar_pagina_estado(estado):
 
     with tabs_estado[2]:
         COLUNAS_EXIB_E = [c for c in [
-            "NUMPED", "DATA", "NOMECLIENTE", "CIDADE", "PRACA",
+            "NUMPED", "DATA_IMPORTACAO", "DATA", "NOMECLIENTE", "CIDADE", "PRACA",
             "NOMESUP", "NOMERCA", "POSICAO", "TIPOVENDA",
             "VLTOTAL", "PESOBRUTOTOT", "DTENTREGA",
             "NUMCARREGAMENTO", "PLACA", "DESTINO"
