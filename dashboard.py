@@ -56,15 +56,10 @@ html, body, .stApp {
 }
 
 /* ---------- FUNDO EM CAMADAS ---------- */
-/* Fica no <html> (raiz real da pagina) em vez de .stApp: containers internos do
-   Streamlit as vezes aplicam transform/filter em elementos por cima de .stApp,
-   o que "prende" o position:fixed dentro deles e faz o fundo sumir (fica preto)
-   assim que a pagina rola alem da altura do conteudo. */
-html {
+.stApp {
     position: relative;
-    min-height: 100%;
 }
-html::before {
+.stApp::before {
     content: "";
     position: fixed;
     inset: 0;
@@ -80,7 +75,7 @@ html::before {
     filter: blur(3px) saturate(0.9);
     transform: scale(1.03);
 }
-html::after {
+.stApp::after {
     content: "";
     position: fixed;
     inset: 0;
@@ -88,9 +83,9 @@ html::after {
     pointer-events: none;
     background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.65) 100%);
 }
-[data-testid="stAppViewContainer"] { background: transparent !important; position: relative; z-index: 1; }
+[data-testid="stAppViewContainer"] { background: transparent !important; position: relative; z-index: 1; min-height: 100vh; }
 [data-testid="stMain"], [data-testid="stMainBlockContainer"], .main, .main > div { background-color: transparent !important; }
-.block-container { padding: 1rem 1.6rem 1.4rem 1.6rem !important; max-width: 100% !important; position: relative; z-index: 1; }
+.block-container { padding: 1rem 1.6rem 1.4rem 1.6rem !important; max-width: 100% !important; position: relative; z-index: 1; min-height: 100vh; }
 
 /* Particulas discretas */
 .particulas { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
