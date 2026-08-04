@@ -566,9 +566,11 @@ COLUNAS_CARGAS = {
     "Horário Criado":           "DATA",
 }
 
-def tratar_dataframe_cargas(df):
+def tratar_dataframe_cargas(df, subfrota=None):
     """Limpeza dedicada para a planilha de CARGAS (rotas/equipamentos do RoadNet).
-    Usa colunas totalmente diferentes das de Liberados/Montados."""
+    Usa colunas totalmente diferentes das de Liberados/Montados.
+    subfrota: usado apenas para SP, marca cada linha como "3P" ou "MALHA"
+    (arquivos SP_3P.xlsx e SP_MALHA.xlsx); nos demais estados fica em branco."""
     df = df.copy()
     df = df.rename(columns={k: v for k, v in COLUNAS_CARGAS.items() if k in df.columns})
     df = df.fillna("")
@@ -605,6 +607,7 @@ def tratar_dataframe_cargas(df):
         df = df.drop_duplicates(subset=["IDROTA"])
 
     df = df.reset_index(drop=True)
+    df["SUBFROTA"] = subfrota if subfrota else ""
     return df
 
 def normalizar_numped(serie):
@@ -670,6 +673,18 @@ def detectar_estado_pelo_nome(nome_arquivo):
         return "SP"
     return None
 
+def detectar_subfrota_carga_sp_pelo_nome(nome_arquivo):
+    """Para o estado de SP (e somente SP), identifica se o arquivo de CARGAS e da
+    subfrota 3P (terceirizada) ou MALHA a partir do nome do arquivo
+    (ex: SP_3P.xlsx, SP_MALHA.xlsx). Os demais estados, incluindo SPW, nao usam
+    essa distincao e continuam com um unico arquivo de cargas."""
+    nome = nome_arquivo.upper()
+    if re.search(r'(?<![A-Z0-9])3P(?![A-Z0-9])', nome):
+        return "3P"
+    if "MALHA" in nome:
+        return "MALHA"
+    return None
+
 def detectar_tipo_pelo_nome(nome_arquivo):
     """Identifica se o arquivo enviado e de pedidos LIBERADOS, MONTADOS ou CARGAS."""
     nome = nome_arquivo.upper()
@@ -678,6 +693,8 @@ def detectar_tipo_pelo_nome(nome_arquivo):
     if "LIBERAD" in nome:
         return "LIBERADOS"
     if "CARGA" in nome or "ROTA" in nome:
+        return "CARGAS"
+    if detectar_subfrota_carga_sp_pelo_nome(nome_arquivo):
         return "CARGAS"
     return None
 
@@ -1081,7 +1098,10 @@ def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual, data_importac
             if tipo == "MONTADOS":
                 df_arquivo = tratar_dataframe_montados(df_bruto)
             elif tipo == "CARGAS":
-                df_arquivo = tratar_dataframe_cargas(df_bruto)
+                # Somente SP distingue subfrota (3P/MALHA) pelo nome do arquivo;
+                # os demais estados (incluindo SPW) seguem com um unico arquivo de cargas.
+                subfrota = detectar_subfrota_carga_sp_pelo_nome(arquivo.name) if estado == "SP" else None
+                df_arquivo = tratar_dataframe_cargas(df_bruto, subfrota=subfrota)
             else:
                 df_arquivo = tratar_dataframe(df_bruto)
             df_arquivo["ESTADO"] = estado
@@ -1143,10 +1163,17 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
             value=datetime.date.today(), format="DD/MM/YYYY", key="data_individual_sel"
         )
 
+        rotulo_uploader = (
+            f"Liberados, Montados e Cargas (SP_3P e SP_MALHA) - {estado_individual}"
+            if estado_individual == "SP"
+            else f"Liberados, Montados e Cargas - {estado_individual}"
+        )
         arquivos_individual = st.file_uploader(
-            f"Liberados, Montados e Cargas - {estado_individual}", type=["xlsx", "xls", "csv"],
+            rotulo_uploader, type=["xlsx", "xls", "csv"],
             accept_multiple_files=True, key=f"up_individual_{estado_individual}"
         )
+        if estado_individual == "SP":
+            st.caption("Para Cargas de SP, envie os dois arquivos separados: **SP_3P** (terceirizada) e **SP_MALHA**.")
 
         if st.button(f"Processar dados de {estado_individual}", type="primary", use_container_width=True):
             if not arquivos_individual:
@@ -1169,7 +1196,8 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
         )
 
         arquivos = st.file_uploader(
-            "Arraste os arquivos de LIBERADOS, MONTADOS e CARGAS de todos os estados aqui — estado e tipo sao identificados automaticamente",
+            "Arraste os arquivos de LIBERADOS, MONTADOS e CARGAS de todos os estados aqui — estado e tipo sao identificados automaticamente "
+            "(para Cargas de SP, envie SP_3P e SP_MALHA separadamente)",
             type=["xlsx", "xls", "csv"],
             accept_multiple_files=True,
             key="up_combinado",
@@ -1717,6 +1745,52 @@ def tabela_rotas_por_tipo_equipamento(df_cargas):
         f'<tbody>{linhas}{linha_total}</tbody></table></div>'
     )
 
+def tabela_cargas_por_subfrota_sp(df_cargas_sp):
+    """Tabela premium exclusiva de SP: resumo de Cargas separado por subfrota
+    (3P e MALHA), no mesmo estilo visual das demais tabelas com Total Geral."""
+    if df_cargas_sp.empty or "SUBFROTA" not in df_cargas_sp.columns:
+        return None
+    df_sp = df_cargas_sp[df_cargas_sp["SUBFROTA"].astype(str).str.strip() != ""]
+    if df_sp.empty:
+        return None
+
+    resumo = df_sp.groupby("SUBFROTA").agg(
+        Rotas=("IDROTA", "count"),
+        Veiculos=("PLACA", pd.Series.nunique),
+        PesoCarregado=("PESOBRUTOTOT", "sum"),
+        Capacidade=("CAPACIDADEPESO", "sum"),
+    ).reset_index().sort_values("Rotas", ascending=False)
+    resumo["Ocupacao"] = resumo.apply(
+        lambda r: (r["PesoCarregado"] / r["Capacidade"] * 100) if r["Capacidade"] else 0, axis=1
+    )
+
+    tot_rotas = int(resumo["Rotas"].sum())
+    tot_veic = int(df_sp["PLACA"].nunique()) if "PLACA" in df_sp.columns else 0
+    tot_peso = resumo["PesoCarregado"].sum()
+    tot_cap = resumo["Capacidade"].sum()
+    tot_ocup = (tot_peso / tot_cap * 100) if tot_cap else 0
+
+    linhas = ""
+    for _, row in resumo.iterrows():
+        linhas += (
+            f"<tr><td>{row['SUBFROTA']}</td><td>{fmt_int(int(row['Rotas']))}</td>"
+            f"<td>{fmt_int(int(row['Veiculos']))}</td><td>{fmt_kg(row['PesoCarregado'])}</td>"
+            f"<td>{fmt_kg(row['Capacidade'])}</td><td>{row['Ocupacao']:.1f}%</td></tr>"
+        )
+    linha_total = (
+        f"<tr class='linha-total'><td>Total Geral</td><td>{fmt_int(tot_rotas)}</td>"
+        f"<td>{fmt_int(tot_veic)}</td><td>{fmt_kg(tot_peso)}</td>"
+        f"<td>{fmt_kg(tot_cap)}</td><td>{tot_ocup:.1f}%</td></tr>"
+    )
+    header = "<tr><th>Subfrota</th><th>Rotas</th><th>Veiculos</th><th>Peso Carregado</th><th>Capacidade Total</th><th>Ocupacao</th></tr>"
+
+    uid = f"tblsubfr_{abs(hash(str(tot_rotas) + str(tot_veic)))}"
+    return (
+        f'<div class="tabela-premium-wrap" style="max-height:300px;overflow-y:auto;">'
+        f'<table class="tabela-premium" id="{uid}"><thead>{header}</thead>'
+        f'<tbody>{linhas}{linha_total}</tbody></table></div>'
+    )
+
 def renderizar_montados():
     st.subheader("Montados x Liberados")
 
@@ -1777,6 +1851,17 @@ def renderizar_montados():
             st.info("Nenhum arquivo de CARGAS foi importado ainda. Envie em 'Importar dados' (ex: AM.xlsx).")
         else:
             st.markdown(tabela_tipo, unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if "SP" in df_cargas_filtrado.get("ESTADO", pd.Series(dtype=str)).unique():
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        st.markdown('<p class="painel-titulo"><span class="ic">🚚</span>Cargas de SP por Subfrota (3P x Malha)</p>', unsafe_allow_html=True)
+        tabela_subfr = tabela_cargas_por_subfrota_sp(df_cargas_filtrado[df_cargas_filtrado["ESTADO"] == "SP"])
+        if tabela_subfr is None:
+            st.info("Nenhum arquivo de Cargas SP_3P/SP_MALHA foi importado ainda.")
+        else:
+            st.markdown(tabela_subfr, unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
 def renderizar_cargas(df_cargas, titulo_geo="por Estado", mostrar_estado=True):
@@ -2196,6 +2281,17 @@ def renderizar_pagina_estado(estado):
                 st.info(f"Nenhum arquivo de CARGAS foi importado para {label_estado} ainda. Envie em 'Importar dados' (ex: {estado}.xlsx).")
             else:
                 st.markdown(tabela_tipo_e, unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        if estado == "SP":
+            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+            st.markdown('<div class="painel">', unsafe_allow_html=True)
+            st.markdown('<p class="painel-titulo"><span class="ic">🚚</span>Cargas de SP por Subfrota (3P x Malha)</p>', unsafe_allow_html=True)
+            tabela_subfr_e = tabela_cargas_por_subfrota_sp(df_cargas_f)
+            if tabela_subfr_e is None:
+                st.info("Nenhum arquivo de Cargas SP_3P/SP_MALHA foi importado ainda para SP.")
+            else:
+                st.markdown(tabela_subfr_e, unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
     with tabs_estado[4]:
