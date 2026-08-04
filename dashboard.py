@@ -363,9 +363,12 @@ def carregar_geral_da_planilha(tipo):
         return pd.DataFrame()
 
     df = pd.DataFrame(valores[1:], columns=valores[0])
-    for col in ["VLTOTAL", "PESOBRUTOTOT"]:
+    for col in ["VLTOTAL", "PESOBRUTOTOT", "CAPACIDADEPESO", "DISTANCIATOTAL"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    for col in ["NUMPARADAS", "NUMORDENS"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
     for col in ["DATA", "DTENTREGA"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce")
@@ -1681,6 +1684,11 @@ def tabela_cargas_resumo_estado(df_cargas):
     if df_cargas.empty or "ESTADO" not in df_cargas.columns:
         return None
 
+    df_cargas = df_cargas.copy()
+    for col in ["PESOBRUTOTOT", "CAPACIDADEPESO"]:
+        if col in df_cargas.columns:
+            df_cargas[col] = pd.to_numeric(df_cargas[col], errors="coerce").fillna(0.0)
+
     resumo = df_cargas.groupby("ESTADO").agg(
         Rotas=("IDROTA", "count"),
         Veiculos=("PLACA", pd.Series.nunique),
@@ -1761,6 +1769,10 @@ def tabela_cargas_por_subfrota_sp(df_cargas_sp):
     df_sp = df_cargas_sp[df_cargas_sp["SUBFROTA"].astype(str).str.strip() != ""]
     if df_sp.empty:
         return None
+    df_sp = df_sp.copy()
+    for col in ["PESOBRUTOTOT", "CAPACIDADEPESO"]:
+        if col in df_sp.columns:
+            df_sp[col] = pd.to_numeric(df_sp[col], errors="coerce").fillna(0.0)
 
     resumo = df_sp.groupby("SUBFROTA").agg(
         Rotas=("IDROTA", "count"),
