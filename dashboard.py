@@ -1805,11 +1805,15 @@ def titulo_bloco_cargas_por_estado():
     aos demais usuarios (login por estado, que so enxergam o proprio estado)."""
     return "Cargas por Estado" if is_admin else "Tipos de Equipamento Utilizados"
 
-def renderizar_bloco_cargas_por_estado(df_cargas, contexto="ainda"):
+def renderizar_bloco_cargas_por_estado(df_cargas, contexto="ainda", chave="geral"):
     """Bloco 'Cargas por Estado': o ADMIN ve a tabela resumo (rotas/veiculos/
     ocupacao) comparando os estados; os demais usuarios (login por estado) veem em
     vez disso um grafico com as tipologias de equipamento utilizadas, ja que so
-    enxergam o proprio estado e a comparacao entre estados nao se aplica."""
+    enxergam o proprio estado e a comparacao entre estados nao se aplica.
+    'chave' identifica onde o grafico esta sendo desenhado (dashboard geral,
+    pagina de um estado especifico, etc.) para evitar que o Streamlit reaproveite
+    o componente de um grafico anterior com numero diferente de barras, o que
+    causava sobreposicao visual ("ghosting") entre renderizacoes."""
     if is_admin:
         tabela_carg = tabela_cargas_resumo_estado(df_cargas)
         if tabela_carg is None:
@@ -1839,16 +1843,24 @@ def renderizar_bloco_cargas_por_estado(df_cargas, contexto="ainda"):
         cliponaxis=False,
         hovertemplate="<b>%{y}</b><br>Rotas: %{x}<br>Percentual: %{customdata[0]:.1f}%<extra></extra>",
     )
+    altura_grafico = min(520, max(220, 42 * len(tipo_df) + 40))
     fig_tipo.update_layout(
         title_text="",
+        autosize=False,
+        height=altura_grafico,
         yaxis=dict(autorange="reversed", title=""),
         xaxis=dict(title="", range=[0, tipo_df["Rotas"].max() * 1.28]),
         coloraxis_showscale=False,
-        height=max(260, 46 * len(tipo_df) + 40),
         margin=dict(l=0, r=10, t=5, b=10),
+        transition_duration=0,
     )
     aplicar_tema_grafico(fig_tipo, titulo_size=1)
-    st.plotly_chart(fig_tipo, use_container_width=True)
+    # Chave unica (com quantidade de categorias) forca o Streamlit a recriar o
+    # componente do zero quando os dados mudam, evitando sobreposicao/ghosting.
+    st.plotly_chart(
+        fig_tipo, use_container_width=True,
+        key=f"graf_tipo_equipamento_{chave}_{len(tipo_df)}_{int(tipo_df['Rotas'].sum())}",
+    )
 
 def renderizar_montados():
     if df_montados_bruto.empty:
@@ -1888,7 +1900,7 @@ def renderizar_montados():
     with col_carg1:
         st.markdown('<div class="painel">', unsafe_allow_html=True)
         st.markdown(f'<p class="painel-titulo"><span class="ic">🚛</span>{titulo_bloco_cargas_por_estado()}</p>', unsafe_allow_html=True)
-        renderizar_bloco_cargas_por_estado(df_cargas_filtrado, contexto="ainda")
+        renderizar_bloco_cargas_por_estado(df_cargas_filtrado, contexto="ainda", chave="dashboard_geral")
         st.markdown('</div>', unsafe_allow_html=True)
     with col_carg2:
         st.markdown('<div class="painel">', unsafe_allow_html=True)
@@ -2286,7 +2298,7 @@ def renderizar_pagina_estado(estado):
             st.markdown('<div class="painel">', unsafe_allow_html=True)
             titulo_carg_e = "Cargas" if is_admin else "Tipos de Equipamento Utilizados"
             st.markdown(f'<p class="painel-titulo"><span class="ic">🚛</span>{titulo_carg_e}</p>', unsafe_allow_html=True)
-            renderizar_bloco_cargas_por_estado(df_cargas_f, contexto=f"para {label_estado} ainda")
+            renderizar_bloco_cargas_por_estado(df_cargas_f, contexto=f"para {label_estado} ainda", chave=f"pagina_{estado}")
             st.markdown('</div>', unsafe_allow_html=True)
         with col_carg2_e:
             st.markdown('<div class="painel">', unsafe_allow_html=True)
