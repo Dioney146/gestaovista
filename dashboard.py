@@ -1851,8 +1851,6 @@ def renderizar_bloco_cargas_por_estado(df_cargas, contexto="ainda"):
     st.plotly_chart(fig_tipo, use_container_width=True)
 
 def renderizar_montados():
-    st.subheader("Montados x Liberados")
-
     if df_montados_bruto.empty:
         st.markdown('<div class="glass-box">', unsafe_allow_html=True)
         st.write("Nenhum arquivo de **MONTADOS** foi importado ainda. Abra 'Importar dados' no topo da pagina e envie os arquivos "
@@ -1862,23 +1860,6 @@ def renderizar_montados():
         return
 
     df_pendentes = calcular_pendentes_montados(df_filtrado, df_montados_filtrado)
-
-    total_montados  = len(df_montados_filtrado)
-    total_liberados = len(df_filtrado)
-    total_pendentes = len(df_pendentes)
-    pct_atendido = ((total_liberados - total_pendentes) / total_liberados * 100) if total_liberados else 0
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.markdown(kpi_card_premium("🧩", "Total Montados", fmt_int(total_montados), "Pedidos montados no periodo", []), unsafe_allow_html=True)
-    with c2:
-        st.markdown(kpi_card_premium("🚚", "Total Liberados", fmt_int(total_liberados), "Pedidos liberados no periodo", []), unsafe_allow_html=True)
-    with c3:
-        st.markdown(kpi_card_premium("⏳", "Ficaram para Tras", fmt_int(total_pendentes), "Liberados que ainda nao foram montados", [], cor="#ef4444"), unsafe_allow_html=True)
-    with c4:
-        st.markdown(kpi_card_premium("✅", "% Atendimento", f"{pct_atendido:.1f}%", "Liberados que ja foram montados", []), unsafe_allow_html=True)
-
-    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
     st.markdown('<div class="painel">', unsafe_allow_html=True)
     st.markdown('<p class="painel-titulo"><span class="ic">🌎</span>Montados x Liberados por Estado</p>', unsafe_allow_html=True)
@@ -2108,40 +2089,11 @@ def renderizar_mapa_interativo(chave, mostrar_titulo=True, altura=480):
             st.session_state["estados_sel_mapa"] = siglas_sistema
             st.rerun()
 
-    if tem_selecao:
-        col_txt, col_btn = st.columns([4, 1])
-        with col_txt:
-            st.caption(f"Mostrando somente: {', '.join(estados_sel)}. Clique em outro estado para trocar, ou limpe o filtro 'Estado' acima para ver todos.")
-        with col_btn:
-            if st.button("Ver todos os estados", use_container_width=True, key=f"btn_ver_todos_{chave}"):
-                st.session_state["estados_sel_mapa"] = []
-                st.rerun()
-    else:
+    if not tem_selecao:
         st.caption("Clique em um estado do mapa para ver somente os dados dele. Estados sem dados aparecem escurecidos.")
 
 def renderizar_mapa():
     renderizar_mapa_interativo(chave="pagina_mapa", mostrar_titulo=True)
-
-def renderizar_rodape():
-    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-    n_estados = df_filtrado["ESTADO"].nunique() if "ESTADO" in df_filtrado.columns else 0
-    n_cidades = df_filtrado["CIDADE"].nunique() if "CIDADE" in df_filtrado.columns else 0
-
-    itens_rodape = [
-        ("🟢", "Monitoramento em Tempo Real", "Dados atualizados a cada importacao"),
-        ("✅", "Dados Confiaveis", "Linhas de totais/resumo filtradas automaticamente"),
-        ("⚡", "Performance", f"{fmt_int(len(df_filtrado))} pedidos processados"),
-        ("🧭", "Visao Completa", f"{n_estados} estado(s) · {fmt_int(n_cidades)} cidade(s)"),
-    ]
-
-    colunas = st.columns(4)
-    for coluna, (icone, titulo, subtitulo) in zip(colunas, itens_rodape):
-        with coluna:
-            st.markdown(
-                f'<div class="rodape-card"><div class="rodape-ic">{icone}</div>'
-                f'<div><div class="rodape-t">{titulo}</div><div class="rodape-s">{subtitulo}</div></div></div>',
-                unsafe_allow_html=True
-            )
 
 # ==================================================
 # PAGINA DEDICADA POR ESTADO
@@ -2396,5 +2348,3 @@ else:
         st.write(f"**Total de pedidos na base:** {fmt_int(len(df))}")
         st.write(f"**Ultima atualizacao:** {time.strftime('%d/%m/%Y as %H:%M:%S')}")
         st.markdown('</div>', unsafe_allow_html=True)
-
-    renderizar_rodape()
