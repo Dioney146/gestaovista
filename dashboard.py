@@ -1822,12 +1822,32 @@ def renderizar_bloco_cargas_por_estado(df_cargas, contexto="ainda"):
         st.info(f"Nenhum arquivo de CARGAS foi importado {contexto}. Envie em 'Importar dados'.")
         return
 
-    tipo_df = df_cargas.groupby("TIPOEQUIPAMENTO").agg(Rotas=("IDROTA", "count")).reset_index().sort_values("Rotas", ascending=False)
-    fig_tipo = px.pie(tipo_df, names="TIPOEQUIPAMENTO", values="Rotas", hole=0.45,
-                       color_discrete_sequence=GRADIENTE_LARANJA)
-    fig_tipo.update_traces(textposition="inside", textinfo="percent+label",
-                            hovertemplate="<b>%{label}</b><br>Rotas: %{value}<extra></extra>")
-    aplicar_tema_grafico(fig_tipo)
+    tipo_df = df_cargas.groupby("TIPOEQUIPAMENTO").agg(Rotas=("IDROTA", "count")).reset_index()
+    tipo_df["Percentual"] = tipo_df["Rotas"] / tipo_df["Rotas"].sum() * 100
+    tipo_df = tipo_df.sort_values("Rotas")
+
+    fig_tipo = px.bar(
+        tipo_df, x="Rotas", y="TIPOEQUIPAMENTO", orientation="h",
+        title="", color="Rotas", color_continuous_scale=GRADIENTE_LARANJA,
+        custom_data=["Percentual"],
+    )
+    fig_tipo.update_traces(
+        marker_line_width=0,
+        text=[f"{int(r)} ({p:.1f}%)" for r, p in zip(tipo_df["Rotas"], tipo_df["Percentual"])],
+        textposition="outside",
+        textfont=dict(color="#FFFFFF", size=12),
+        cliponaxis=False,
+        hovertemplate="<b>%{y}</b><br>Rotas: %{x}<br>Percentual: %{customdata[0]:.1f}%<extra></extra>",
+    )
+    fig_tipo.update_layout(
+        title_text="",
+        yaxis=dict(autorange="reversed", title=""),
+        xaxis=dict(title="", range=[0, tipo_df["Rotas"].max() * 1.28]),
+        coloraxis_showscale=False,
+        height=max(260, 46 * len(tipo_df) + 40),
+        margin=dict(l=0, r=10, t=5, b=10),
+    )
+    aplicar_tema_grafico(fig_tipo, titulo_size=1)
     st.plotly_chart(fig_tipo, use_container_width=True)
 
 def renderizar_montados():
