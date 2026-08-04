@@ -1444,7 +1444,14 @@ def renderizar_por_estados():
     estado_df = resumo_por_estado(df_filtrado)
     estado_ordenado = estado_df.sort_values("Valor")
 
-    col_tabela, col_grafico, col_mapa = st.columns([1.05, 1.05, 0.95])
+    # Quando os dados exibidos sao exclusivamente de SP, o grafico "Valor por Estado"
+    # nao agrega nada (so tem uma barra) — nesse caso mostramos so a tabela e o mapa.
+    somente_sp = set(estado_df["Estado"].astype(str)) == {"SP"}
+
+    if somente_sp:
+        col_tabela, col_mapa = st.columns([1.1, 0.9])
+    else:
+        col_tabela, col_grafico, col_mapa = st.columns([1.05, 1.05, 0.95])
 
     with col_tabela:
         st.markdown('<div class="painel">', unsafe_allow_html=True)
@@ -1452,32 +1459,33 @@ def renderizar_por_estados():
         st.markdown(montar_tabela_com_total(estado_df, "Estado", max_height=340), unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    with col_grafico:
-        st.markdown('<div class="painel">', unsafe_allow_html=True)
-        st.markdown('<p class="painel-titulo"><span class="ic">📈</span>Valor por Estado</p>', unsafe_allow_html=True)
-        fig_estado = px.bar(
-            estado_ordenado, x="Valor", y="Estado", orientation="h",
-            title="", color="Valor", color_continuous_scale=GRADIENTE_LARANJA,
-            custom_data=["Pedidos"],
-        )
-        fig_estado.update_traces(
-            marker_line_width=0,
-            text=estado_ordenado["Valor"].apply(fmt_brl),
-            textposition="outside",
-            textfont=dict(color="#FFFFFF", size=11),
-            cliponaxis=False,
-            hovertemplate="<b>%{y}</b><br>Valor: R$ %{x:,.2f}<br>Pedidos: %{customdata[0]}<extra></extra>",
-        )
-        fig_estado.update_layout(
-            yaxis=dict(autorange="reversed", title=""),
-            xaxis=dict(title="", tickprefix="R$ ", separatethousands=True, range=[0, estado_ordenado["Valor"].max() * 1.3]),
-            coloraxis_showscale=False,
-            height=340,
-            margin=dict(l=0, r=10, t=5, b=10),
-        )
-        aplicar_tema_grafico(fig_estado, titulo_size=1)
-        st.plotly_chart(fig_estado, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+    if not somente_sp:
+        with col_grafico:
+            st.markdown('<div class="painel">', unsafe_allow_html=True)
+            st.markdown('<p class="painel-titulo"><span class="ic">📈</span>Valor por Estado</p>', unsafe_allow_html=True)
+            fig_estado = px.bar(
+                estado_ordenado, x="Valor", y="Estado", orientation="h",
+                title="", color="Valor", color_continuous_scale=GRADIENTE_LARANJA,
+                custom_data=["Pedidos"],
+            )
+            fig_estado.update_traces(
+                marker_line_width=0,
+                text=estado_ordenado["Valor"].apply(fmt_brl),
+                textposition="outside",
+                textfont=dict(color="#FFFFFF", size=11),
+                cliponaxis=False,
+                hovertemplate="<b>%{y}</b><br>Valor: R$ %{x:,.2f}<br>Pedidos: %{customdata[0]}<extra></extra>",
+            )
+            fig_estado.update_layout(
+                yaxis=dict(autorange="reversed", title=""),
+                xaxis=dict(title="", tickprefix="R$ ", separatethousands=True, range=[0, estado_ordenado["Valor"].max() * 1.3]),
+                coloraxis_showscale=False,
+                height=340,
+                margin=dict(l=0, r=10, t=5, b=10),
+            )
+            aplicar_tema_grafico(fig_estado, titulo_size=1)
+            st.plotly_chart(fig_estado, use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
     with col_mapa:
         st.markdown('<div class="painel">', unsafe_allow_html=True)
