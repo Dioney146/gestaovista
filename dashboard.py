@@ -1799,6 +1799,37 @@ def tabela_cargas_por_subfrota_sp(df_cargas_sp):
         f'<tbody>{linhas}{linha_total}</tbody></table></div>'
     )
 
+def titulo_bloco_cargas_por_estado():
+    """Titulo do bloco 'Cargas por Estado': so o ADMIN ve a tabela comparativa entre
+    estados, entao o rotulo muda para refletir o grafico de tipologias mostrado
+    aos demais usuarios (login por estado, que so enxergam o proprio estado)."""
+    return "Cargas por Estado" if is_admin else "Tipos de Equipamento Utilizados"
+
+def renderizar_bloco_cargas_por_estado(df_cargas, contexto="ainda"):
+    """Bloco 'Cargas por Estado': o ADMIN ve a tabela resumo (rotas/veiculos/
+    ocupacao) comparando os estados; os demais usuarios (login por estado) veem em
+    vez disso um grafico com as tipologias de equipamento utilizadas, ja que so
+    enxergam o proprio estado e a comparacao entre estados nao se aplica."""
+    if is_admin:
+        tabela_carg = tabela_cargas_resumo_estado(df_cargas)
+        if tabela_carg is None:
+            st.info(f"Nenhum arquivo de CARGAS foi importado {contexto}. Envie em 'Importar dados' (ex: AM.xlsx).")
+        else:
+            st.markdown(tabela_carg, unsafe_allow_html=True)
+        return
+
+    if df_cargas.empty or "TIPOEQUIPAMENTO" not in df_cargas.columns:
+        st.info(f"Nenhum arquivo de CARGAS foi importado {contexto}. Envie em 'Importar dados'.")
+        return
+
+    tipo_df = df_cargas.groupby("TIPOEQUIPAMENTO").agg(Rotas=("IDROTA", "count")).reset_index().sort_values("Rotas", ascending=False)
+    fig_tipo = px.pie(tipo_df, names="TIPOEQUIPAMENTO", values="Rotas", hole=0.45,
+                       color_discrete_sequence=GRADIENTE_LARANJA)
+    fig_tipo.update_traces(textposition="inside", textinfo="percent+label",
+                            hovertemplate="<b>%{label}</b><br>Rotas: %{value}<extra></extra>")
+    aplicar_tema_grafico(fig_tipo)
+    st.plotly_chart(fig_tipo, use_container_width=True)
+
 def renderizar_montados():
     st.subheader("Montados x Liberados")
 
@@ -1855,12 +1886,8 @@ def renderizar_montados():
     col_carg1, col_carg2 = st.columns(2)
     with col_carg1:
         st.markdown('<div class="painel">', unsafe_allow_html=True)
-        st.markdown('<p class="painel-titulo"><span class="ic">🚛</span>Cargas por Estado</p>', unsafe_allow_html=True)
-        tabela_carg = tabela_cargas_resumo_estado(df_cargas_filtrado)
-        if tabela_carg is None:
-            st.info("Nenhum arquivo de CARGAS foi importado ainda. Envie em 'Importar dados' (ex: AM.xlsx).")
-        else:
-            st.markdown(tabela_carg, unsafe_allow_html=True)
+        st.markdown(f'<p class="painel-titulo"><span class="ic">🚛</span>{titulo_bloco_cargas_por_estado()}</p>', unsafe_allow_html=True)
+        renderizar_bloco_cargas_por_estado(df_cargas_filtrado, contexto="ainda")
         st.markdown('</div>', unsafe_allow_html=True)
     with col_carg2:
         st.markdown('<div class="painel">', unsafe_allow_html=True)
@@ -2285,12 +2312,9 @@ def renderizar_pagina_estado(estado):
         col_carg1_e, col_carg2_e = st.columns(2)
         with col_carg1_e:
             st.markdown('<div class="painel">', unsafe_allow_html=True)
-            st.markdown('<p class="painel-titulo"><span class="ic">🚛</span>Cargas</p>', unsafe_allow_html=True)
-            tabela_carg_e = tabela_cargas_resumo_estado(df_cargas_f)
-            if tabela_carg_e is None:
-                st.info(f"Nenhum arquivo de CARGAS foi importado para {label_estado} ainda. Envie em 'Importar dados' (ex: {estado}.xlsx).")
-            else:
-                st.markdown(tabela_carg_e, unsafe_allow_html=True)
+            titulo_carg_e = "Cargas" if is_admin else "Tipos de Equipamento Utilizados"
+            st.markdown(f'<p class="painel-titulo"><span class="ic">🚛</span>{titulo_carg_e}</p>', unsafe_allow_html=True)
+            renderizar_bloco_cargas_por_estado(df_cargas_f, contexto=f"para {label_estado} ainda")
             st.markdown('</div>', unsafe_allow_html=True)
         with col_carg2_e:
             st.markdown('<div class="painel">', unsafe_allow_html=True)
