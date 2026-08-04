@@ -1839,6 +1839,17 @@ def renderizar_montados():
         st.markdown(tabela_cmp, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
+    if "SP" in df_cargas_filtrado.get("ESTADO", pd.Series(dtype=str)).unique():
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        st.markdown('<p class="painel-titulo"><span class="ic">🚚</span>Cargas de SP por Subfrota (3P x Malha)</p>', unsafe_allow_html=True)
+        tabela_subfr = tabela_cargas_por_subfrota_sp(df_cargas_filtrado[df_cargas_filtrado["ESTADO"] == "SP"])
+        if tabela_subfr is None:
+            st.info("Nenhum arquivo de Cargas SP_3P/SP_MALHA foi importado ainda.")
+        else:
+            st.markdown(tabela_subfr, unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
     col_carg1, col_carg2 = st.columns(2)
@@ -1859,17 +1870,6 @@ def renderizar_montados():
             st.info("Nenhum arquivo de CARGAS foi importado ainda. Envie em 'Importar dados' (ex: AM.xlsx).")
         else:
             st.markdown(tabela_tipo, unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    if "SP" in df_cargas_filtrado.get("ESTADO", pd.Series(dtype=str)).unique():
-        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-        st.markdown('<div class="painel">', unsafe_allow_html=True)
-        st.markdown('<p class="painel-titulo"><span class="ic">🚚</span>Cargas de SP por Subfrota (3P x Malha)</p>', unsafe_allow_html=True)
-        tabela_subfr = tabela_cargas_por_subfrota_sp(df_cargas_filtrado[df_cargas_filtrado["ESTADO"] == "SP"])
-        if tabela_subfr is None:
-            st.info("Nenhum arquivo de Cargas SP_3P/SP_MALHA foi importado ainda.")
-        else:
-            st.markdown(tabela_subfr, unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
 def renderizar_cargas(df_cargas, titulo_geo="por Estado", mostrar_estado=True):
@@ -2270,6 +2270,17 @@ def renderizar_pagina_estado(estado):
                 st.markdown(f"**Pedidos liberados de {label_estado} que ainda nao foram montados:**")
                 st.markdown(tabela_premium_html(formatar_tabela(df_pendentes_e[[c for c in COLUNAS_EXIB_E if c in df_pendentes_e.columns]])), unsafe_allow_html=True)
 
+        if estado == "SP":
+            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+            st.markdown('<div class="painel">', unsafe_allow_html=True)
+            st.markdown('<p class="painel-titulo"><span class="ic">🚚</span>Cargas de SP por Subfrota (3P x Malha)</p>', unsafe_allow_html=True)
+            tabela_subfr_e = tabela_cargas_por_subfrota_sp(df_cargas_f)
+            if tabela_subfr_e is None:
+                st.info("Nenhum arquivo de Cargas SP_3P/SP_MALHA foi importado ainda para SP.")
+            else:
+                st.markdown(tabela_subfr_e, unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
         col_carg1_e, col_carg2_e = st.columns(2)
         with col_carg1_e:
@@ -2289,17 +2300,6 @@ def renderizar_pagina_estado(estado):
                 st.info(f"Nenhum arquivo de CARGAS foi importado para {label_estado} ainda. Envie em 'Importar dados' (ex: {estado}.xlsx).")
             else:
                 st.markdown(tabela_tipo_e, unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        if estado == "SP":
-            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-            st.markdown('<div class="painel">', unsafe_allow_html=True)
-            st.markdown('<p class="painel-titulo"><span class="ic">🚚</span>Cargas de SP por Subfrota (3P x Malha)</p>', unsafe_allow_html=True)
-            tabela_subfr_e = tabela_cargas_por_subfrota_sp(df_cargas_f)
-            if tabela_subfr_e is None:
-                st.info("Nenhum arquivo de Cargas SP_3P/SP_MALHA foi importado ainda para SP.")
-            else:
-                st.markdown(tabela_subfr_e, unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
     with tabs_estado[4]:
