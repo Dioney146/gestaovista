@@ -85,7 +85,10 @@ html, body, .stApp {
 }
 [data-testid="stAppViewContainer"] { background: transparent !important; position: relative; z-index: 1; min-height: 100vh; }
 [data-testid="stMain"], [data-testid="stMainBlockContainer"], .main, .main > div { background-color: transparent !important; }
-.block-container { padding: 1rem 1.6rem 1.4rem 1.6rem !important; max-width: 100% !important; position: relative; z-index: 1; min-height: 100vh; }
+/* Sem min-height fixo aqui: quem garante a tela cheia em paginas curtas e o html/body/.stApp
+   acima. Forcar tambem o block-container a 100vh empilhava sobras vazias no fim de abas com
+   pouco conteudo, dando a sensacao de rolagem sem fim. */
+.block-container { padding: 1rem 1.6rem 1.4rem 1.6rem !important; max-width: 100% !important; position: relative; z-index: 1; }
 
 /* Particulas discretas */
 .particulas { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
