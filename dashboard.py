@@ -375,6 +375,7 @@ def carregar_geral_da_planilha(tipo):
         return pd.DataFrame()
 
     df = pd.DataFrame(valores[1:], columns=valores[0])
+    df = deduplicar_colunas(df)
     for col in ["VLTOTAL", "PESOBRUTOTOT", "CAPACIDADEPESO", "DISTANCIATOTAL"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
@@ -397,9 +398,11 @@ def salvar_estado_na_planilha(estado, tipo, df, data_importacao=None):
 
     df_novo = df.copy()
     df_novo["DATA_IMPORTACAO"] = data_alvo
+    df_novo = deduplicar_colunas(df_novo)
 
     df_historico = carregar_geral_da_planilha(tipo)
     if not df_historico.empty:
+        df_historico = deduplicar_colunas(df_historico)
         mascara_manter = ~(
             (df_historico["ESTADO"].astype(str) == estado) &
             (df_historico["DATA_IMPORTACAO"].astype(str) == data_alvo)
@@ -613,6 +616,15 @@ COLUNAS_CARGAS = {
     "Horário Criado":           "DATA",
 }
 
+def deduplicar_colunas(df):
+    """Remove colunas duplicadas (mesmo nome apos o rename), mantendo a primeira
+    ocorrencia. Alguns relatorios de CARGAS trazem, alem das colunas amigaveis
+    (ex: 'ID'), uma coluna extra ja com o nome tecnico (ex: 'IDROTA') — o rename
+    por nome faz as duas caírem no mesmo nome, e o pandas quebra depois com
+    'Reindexing only valid with uniquely valued Index objects' ao tentar
+    concatenar/salvar. Isso e o que causava o erro ao importar Cargas de DF."""
+    return df.loc[:, ~df.columns.duplicated()]
+
 def tratar_dataframe_cargas(df, subfrota=None):
     """Limpeza dedicada para a planilha de CARGAS (rotas/equipamentos do RoadNet).
     Usa colunas totalmente diferentes das de Liberados/Montados.
@@ -621,6 +633,7 @@ def tratar_dataframe_cargas(df, subfrota=None):
     arquivo; nos demais estados fica em branco."""
     df = df.copy()
     df = df.rename(columns={k: v for k, v in COLUNAS_CARGAS.items() if k in df.columns})
+    df = deduplicar_colunas(df)
     df = df.fillna("")
 
     # A ultima linha do relatorio costuma ser uma linha de TOTAL (sem descricao da rota) — descarta.
