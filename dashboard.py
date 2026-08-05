@@ -3,6 +3,7 @@ import pandas as pd
 import streamlit as st
 import io
 import re
+import unicodedata
 import json
 import time
 import datetime
@@ -251,9 +252,9 @@ div[data-testid="column"] .stButton button[kind="primary"]:hover { transform: tr
 .tabela-premium-wrap { border-radius: var(--radius-md); overflow:hidden; border: 1px solid var(--border-soft); background: var(--bg-card-soft); backdrop-filter: blur(10px); }
 .tabela-premium { width:100%; border-collapse: collapse; font-family:'Inter',sans-serif; font-size: 13px; }
 .tabela-premium thead th {
-    background: rgba(255,255,255,0.045); color: var(--accent-soft); text-transform: uppercase;
+    background: #12151C; color: var(--accent-soft); text-transform: uppercase;
     font-size: 11px; letter-spacing: .8px; font-weight: 700; text-align:left; padding: 12px 16px;
-    border-bottom: 1px solid rgba(245,158,11,0.25); white-space: nowrap; position: sticky; top:0;
+    border-bottom: 1px solid rgba(245,158,11,0.25); white-space: nowrap; position: sticky; top:0; z-index: 2;
 }
 .tabela-premium tbody td { padding: 10px 16px; color: #E8ECF1; border-bottom: 1px solid rgba(255,255,255,0.04); white-space: nowrap; }
 .tabela-premium tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
@@ -317,6 +318,14 @@ MAPA_UF_PARA_ESTADO = {
     "MG": ["MG"],
     "ES": ["ES"],
     "SP": ["SP", "SPW"],
+}
+
+# Estados em que o arquivo de CARGAS vem separado por subfrota (um arquivo por
+# subfrota, identificado pelo nome — ex: SP_3P.xlsx/SP_MALHA.xlsx,
+# DF_DF.xlsx/DF_MT.xlsx). Os demais estados continuam com um unico arquivo.
+SUBFROTAS_CARGA_POR_ESTADO = {
+    "SP": ["3P", "MALHA"],
+    "DF": ["MT", "DF"],
 }
 
 # ==================================================
@@ -479,9 +488,41 @@ def parse_numero_brl(valor):
     except (ValueError, TypeError):
         return 0.0
 
+# Colunas que o sistema reconhece nos pedidos LIBERADOS. A planilha nao precisa
+# mais seguir uma ordem/layout fixo de colunas: o codigo procura essas colunas
+# PELO NOME (tolerando maiusculas/minusculas, espacos e acentos) em qualquer
+# posicao do arquivo, ignora colunas extras que nao estao nessa lista, e segue
+# normalmente mesmo que alguma coluna opcional esteja faltando.
+COLUNAS_LIBERADOS_CONHECIDAS = [
+    "NUMPED", "VLTOTAL", "PESOBRUTOTOT", "NOMECLIENTE", "POSICAO", "NOMERCA",
+    "NOMESUP", "CIDADE", "TIPOVENDA", "PRACA", "DESTINO", "PLACA",
+    "DATA", "DTENTREGA", "NUMCARREGAMENTO",
+]
+
+def normalizar_nome_coluna(nome):
+    """Remove espacos, acentos e pontuacao e deixa maiusculo, para comparar nomes
+    de coluna ignorando pequenas variacoes de formatacao (ex: 'Num Ped', 'num_ped'
+    e 'NUMPED' devem ser reconhecidos como a mesma coluna)."""
+    nome = unicodedata.normalize("NFKD", str(nome)).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^A-Z0-9]", "", nome.upper())
+
+def renomear_colunas_liberados(df):
+    """Reconhece as colunas de LIBERADOS pelo nome (nao pela posicao), entao a
+    planilha pode vir em qualquer ordem de colunas — so precisa ter, em algum
+    lugar, uma coluna cujo nome corresponda (com tolerancia a maiusculas/
+    minusculas e espacos) a cada nome conhecido em COLUNAS_LIBERADOS_CONHECIDAS."""
+    mapa_normalizado = {normalizar_nome_coluna(c): c for c in df.columns}
+    renomeio = {}
+    for nome_canonico in COLUNAS_LIBERADOS_CONHECIDAS:
+        chave = normalizar_nome_coluna(nome_canonico)
+        if chave in mapa_normalizado and mapa_normalizado[chave] != nome_canonico:
+            renomeio[mapa_normalizado[chave]] = nome_canonico
+    return df.rename(columns=renomeio)
+
 def tratar_dataframe(df):
     """Aplica a limpeza padrao (numeros, datas, textos) em um dataframe de uma aba."""
     df = df.copy()
+    df = renomear_colunas_liberados(df)
     df = df.fillna(0)
 
     for col in ["VLTOTAL", "PESOBRUTOTOT"]:
@@ -575,8 +616,9 @@ COLUNAS_CARGAS = {
 def tratar_dataframe_cargas(df, subfrota=None):
     """Limpeza dedicada para a planilha de CARGAS (rotas/equipamentos do RoadNet).
     Usa colunas totalmente diferentes das de Liberados/Montados.
-    subfrota: usado apenas para SP, marca cada linha como "3P" ou "MALHA"
-    (arquivos SP_3P.xlsx e SP_MALHA.xlsx); nos demais estados fica em branco."""
+    subfrota: usado apenas nos estados configurados em SUBFROTAS_CARGA_POR_ESTADO
+    (hoje SP e DF), marca cada linha com a subfrota identificada pelo nome do
+    arquivo; nos demais estados fica em branco."""
     df = df.copy()
     df = df.rename(columns={k: v for k, v in COLUNAS_CARGAS.items() if k in df.columns})
     df = df.fillna("")
@@ -679,19 +721,21 @@ def detectar_estado_pelo_nome(nome_arquivo):
         return "SP"
     return None
 
-def detectar_subfrota_carga_sp_pelo_nome(nome_arquivo):
-    """Para o estado de SP (e somente SP), identifica se o arquivo de CARGAS e da
-    subfrota 3P (terceirizada) ou MALHA a partir do nome do arquivo
-    (ex: SP_3P.xlsx, SP_MALHA.xlsx). Os demais estados, incluindo SPW, nao usam
-    essa distincao e continuam com um unico arquivo de cargas."""
+def detectar_subfrota_carga_pelo_nome(nome_arquivo, estado):
+    """Para estados configurados em SUBFROTAS_CARGA_POR_ESTADO (hoje SP e DF),
+    identifica de qual subfrota e o arquivo de CARGAS a partir do nome do arquivo
+    (ex: SP_3P.xlsx, SP_MALHA.xlsx, DF_DF.xlsx, DF_MT.xlsx). Os demais estados nao
+    usam essa distincao e continuam com um unico arquivo de cargas."""
+    subfrotas = SUBFROTAS_CARGA_POR_ESTADO.get(estado)
+    if not subfrotas:
+        return None
     nome = nome_arquivo.upper()
-    if re.search(r'(?<![A-Z0-9])3P(?![A-Z0-9])', nome):
-        return "3P"
-    if "MALHA" in nome:
-        return "MALHA"
+    for subfrota in subfrotas:
+        if re.search(rf'(?<![A-Z0-9]){re.escape(subfrota)}(?![A-Z0-9])', nome):
+            return subfrota
     return None
 
-def detectar_tipo_pelo_nome(nome_arquivo):
+def detectar_tipo_pelo_nome(nome_arquivo, estado=None):
     """Identifica se o arquivo enviado e de pedidos LIBERADOS, MONTADOS ou CARGAS."""
     nome = nome_arquivo.upper()
     if "MONTAD" in nome:
@@ -700,7 +744,7 @@ def detectar_tipo_pelo_nome(nome_arquivo):
         return "LIBERADOS"
     if "CARGA" in nome or "ROTA" in nome:
         return "CARGAS"
-    if detectar_subfrota_carga_sp_pelo_nome(nome_arquivo):
+    if estado and detectar_subfrota_carga_pelo_nome(nome_arquivo, estado):
         return "CARGAS"
     return None
 
@@ -1095,7 +1139,7 @@ def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual, data_importac
 
             df_bruto = ler_arquivo_upload(arquivo)
             tipo = (
-                detectar_tipo_pelo_nome(arquivo.name)
+                detectar_tipo_pelo_nome(arquivo.name, estado)
                 or mapa_tipo_manual.get(arquivo.name)
                 or detectar_tipo_pelo_conteudo(df_bruto.columns)
                 or "LIBERADOS"
@@ -1104,9 +1148,10 @@ def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual, data_importac
             if tipo == "MONTADOS":
                 df_arquivo = tratar_dataframe_montados(df_bruto)
             elif tipo == "CARGAS":
-                # Somente SP distingue subfrota (3P/MALHA) pelo nome do arquivo;
-                # os demais estados (incluindo SPW) seguem com um unico arquivo de cargas.
-                subfrota = detectar_subfrota_carga_sp_pelo_nome(arquivo.name) if estado == "SP" else None
+                # So estados configurados em SUBFROTAS_CARGA_POR_ESTADO (SP, DF)
+                # distinguem subfrota pelo nome do arquivo; os demais seguem com
+                # um unico arquivo de cargas.
+                subfrota = detectar_subfrota_carga_pelo_nome(arquivo.name, estado)
                 df_arquivo = tratar_dataframe_cargas(df_bruto, subfrota=subfrota)
             else:
                 df_arquivo = tratar_dataframe(df_bruto)
@@ -1169,17 +1214,19 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
             value=datetime.date.today(), format="DD/MM/YYYY", key="data_individual_sel"
         )
 
+        subfrotas_estado_individual = SUBFROTAS_CARGA_POR_ESTADO.get(estado_individual)
         rotulo_uploader = (
-            f"Liberados, Montados e Cargas (SP_3P e SP_MALHA) - {estado_individual}"
-            if estado_individual == "SP"
+            f"Liberados, Montados e Cargas ({' e '.join(f'{estado_individual}_{s}' for s in subfrotas_estado_individual)}) - {estado_individual}"
+            if subfrotas_estado_individual
             else f"Liberados, Montados e Cargas - {estado_individual}"
         )
         arquivos_individual = st.file_uploader(
             rotulo_uploader, type=["xlsx", "xls", "csv"],
             accept_multiple_files=True, key=f"up_individual_{estado_individual}"
         )
-        if estado_individual == "SP":
-            st.caption("Para Cargas de SP, envie os dois arquivos separados: **SP_3P** (terceirizada) e **SP_MALHA**.")
+        if subfrotas_estado_individual:
+            nomes_exemplo = " e ".join(f"**{estado_individual}_{s}**" for s in subfrotas_estado_individual)
+            st.caption(f"Para Cargas de {estado_individual}, envie os arquivos separados por subfrota: {nomes_exemplo}.")
 
         if st.button(f"Processar dados de {estado_individual}", type="primary", use_container_width=True):
             if not arquivos_individual:
@@ -1203,7 +1250,7 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
 
         arquivos = st.file_uploader(
             "Arraste os arquivos de LIBERADOS, MONTADOS e CARGAS de todos os estados aqui — estado e tipo sao identificados automaticamente "
-            "(para Cargas de SP, envie SP_3P e SP_MALHA separadamente)",
+            "(para Cargas de SP, envie SP_3P e SP_MALHA separadamente; para DF, envie DF_DF e DF_MT separadamente)",
             type=["xlsx", "xls", "csv"],
             accept_multiple_files=True,
             key="up_combinado",
@@ -1216,7 +1263,8 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
             estado_indef = [a for a in arquivos if detectar_estado_pelo_nome(a.name) is None]
             tipo_indef = []
             for a in arquivos:
-                if detectar_tipo_pelo_nome(a.name):
+                estado_a = detectar_estado_pelo_nome(a.name) or mapa_estado_manual.get(a.name)
+                if detectar_tipo_pelo_nome(a.name, estado_a):
                     continue
                 try:
                     if detectar_tipo_pelo_conteudo(ler_arquivo_upload(a).columns):
@@ -1764,12 +1812,13 @@ def tabela_rotas_por_tipo_equipamento(df_cargas):
         f'<tbody>{linhas}{linha_total}</tbody></table></div>'
     )
 
-def tabela_cargas_por_subfrota_sp(df_cargas_sp):
-    """Tabela premium exclusiva de SP: resumo de Cargas separado por subfrota
-    (3P e MALHA), no mesmo estilo visual das demais tabelas com Total Geral."""
-    if df_cargas_sp.empty or "SUBFROTA" not in df_cargas_sp.columns:
+def tabela_cargas_por_subfrota(df_cargas_estado):
+    """Tabela premium (para estados com subfrota configurada, ex: SP, DF):
+    resumo de Cargas separado por subfrota, no mesmo estilo visual das demais
+    tabelas com Total Geral."""
+    if df_cargas_estado.empty or "SUBFROTA" not in df_cargas_estado.columns:
         return None
-    df_sp = df_cargas_sp[df_cargas_sp["SUBFROTA"].astype(str).str.strip() != ""]
+    df_sp = df_cargas_estado[df_cargas_estado["SUBFROTA"].astype(str).str.strip() != ""]
     if df_sp.empty:
         return None
     df_sp = df_sp.copy()
@@ -1898,13 +1947,17 @@ def renderizar_montados():
         st.markdown(tabela_cmp, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    if "SP" in df_cargas_filtrado.get("ESTADO", pd.Series(dtype=str)).unique():
+    estados_presentes_cargas = set(df_cargas_filtrado.get("ESTADO", pd.Series(dtype=str)).unique())
+    for estado_subfrota in SUBFROTAS_CARGA_POR_ESTADO:
+        if estado_subfrota not in estados_presentes_cargas:
+            continue
+        rotulo_subfrotas = " x ".join(SUBFROTAS_CARGA_POR_ESTADO[estado_subfrota])
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
         st.markdown('<div class="painel">', unsafe_allow_html=True)
-        st.markdown('<p class="painel-titulo"><span class="ic">🚚</span>Cargas de SP por Subfrota (3P x Malha)</p>', unsafe_allow_html=True)
-        tabela_subfr = tabela_cargas_por_subfrota_sp(df_cargas_filtrado[df_cargas_filtrado["ESTADO"] == "SP"])
+        st.markdown(f'<p class="painel-titulo"><span class="ic">🚚</span>Cargas de {estado_subfrota} por Subfrota ({rotulo_subfrotas})</p>', unsafe_allow_html=True)
+        tabela_subfr = tabela_cargas_por_subfrota(df_cargas_filtrado[df_cargas_filtrado["ESTADO"] == estado_subfrota])
         if tabela_subfr is None:
-            st.info("Nenhum arquivo de Cargas SP_3P/SP_MALHA foi importado ainda.")
+            st.info(f"Nenhum arquivo de Cargas por subfrota foi importado ainda para {estado_subfrota}.")
         else:
             st.markdown(tabela_subfr, unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
@@ -2296,13 +2349,14 @@ def renderizar_pagina_estado(estado):
                 st.markdown(f"**Pedidos liberados de {label_estado} que ainda nao foram montados:**")
                 st.markdown(tabela_premium_html(formatar_tabela(df_pendentes_e[[c for c in COLUNAS_EXIB_E if c in df_pendentes_e.columns]])), unsafe_allow_html=True)
 
-        if estado == "SP":
+        if estado in SUBFROTAS_CARGA_POR_ESTADO:
+            rotulo_subfrotas_e = " x ".join(SUBFROTAS_CARGA_POR_ESTADO[estado])
             st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
             st.markdown('<div class="painel">', unsafe_allow_html=True)
-            st.markdown('<p class="painel-titulo"><span class="ic">🚚</span>Cargas de SP por Subfrota (3P x Malha)</p>', unsafe_allow_html=True)
-            tabela_subfr_e = tabela_cargas_por_subfrota_sp(df_cargas_f)
+            st.markdown(f'<p class="painel-titulo"><span class="ic">🚚</span>Cargas de {estado} por Subfrota ({rotulo_subfrotas_e})</p>', unsafe_allow_html=True)
+            tabela_subfr_e = tabela_cargas_por_subfrota(df_cargas_f)
             if tabela_subfr_e is None:
-                st.info("Nenhum arquivo de Cargas SP_3P/SP_MALHA foi importado ainda para SP.")
+                st.info(f"Nenhum arquivo de Cargas por subfrota foi importado ainda para {estado}.")
             else:
                 st.markdown(tabela_subfr_e, unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
