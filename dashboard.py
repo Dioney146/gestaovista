@@ -1971,14 +1971,7 @@ def renderizar_bloco_cargas_por_estado(df_cargas, contexto="ainda", chave="geral
                 f'<span class="ic">🔀</span>Por Subfrota ({" x ".join(subfrotas_presentes)})</p>',
                 unsafe_allow_html=True,
             )
-            col_tab_sub, col_graf_sub = st.columns([1.3, 1])
-            with col_tab_sub:
-                tabela_sub = tabela_rotas_por_tipo_equipamento(
-                    df_cargas[df_cargas["SUBFROTA"].astype(str).str.strip() != ""],
-                    coluna_pivot="SUBFROTA",
-                )
-                if tabela_sub:
-                    st.markdown(tabela_sub, unsafe_allow_html=True)
+            col_graf_sub, col_tab_sub = st.columns([1.3, 1])
             with col_graf_sub:
                 fig_cruz = px.bar(
                     cruzado_df, x="TIPOEQUIPAMENTO", y="Rotas", color="SUBFROTA", barmode="group",
@@ -2007,6 +2000,13 @@ def renderizar_bloco_cargas_por_estado(df_cargas, contexto="ainda", chave="geral
                     fig_cruz, use_container_width=True,
                     key=f"graf_tipo_subfrota_{chave}_{len(cruzado_df)}_{int(cruzado_df['Rotas'].sum())}",
                 )
+            with col_tab_sub:
+                tabela_sub = tabela_rotas_por_tipo_equipamento(
+                    df_cargas[df_cargas["SUBFROTA"].astype(str).str.strip() != ""],
+                    coluna_pivot="SUBFROTA",
+                )
+                if tabela_sub:
+                    st.markdown(tabela_sub, unsafe_allow_html=True)
 
 def renderizar_montados():
     if df_montados_bruto.empty:
