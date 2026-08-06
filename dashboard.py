@@ -1464,6 +1464,18 @@ if not df_montados_filtrado.empty:
     if datas_sel and "DATA_IMPORTACAO" in df_montados_filtrado.columns:
         df_montados_filtrado = df_montados_filtrado[df_montados_filtrado["DATA_IMPORTACAO"].astype(str).isin(datas_sel)]
 
+# Versao dos MONTADOS so com Estado/Cidade filtrados (SEM o filtro de Data de
+# Importacao) — usada exclusivamente para achar quem "ficou para tras". Um
+# pedido pode ter sido liberado num dia e montado (importado) em outro dia
+# diferente; se a comparacao usasse o mesmo filtro de data dos dois lados, um
+# pedido ja montado em outra data apareceria erradamente como pendente.
+df_montados_para_comparar = df_montados_bruto.copy()
+if not df_montados_para_comparar.empty:
+    if estados_sel and "ESTADO" in df_montados_para_comparar.columns:
+        df_montados_para_comparar = df_montados_para_comparar[df_montados_para_comparar["ESTADO"].isin(estados_sel)]
+    if cidades_sel and "CIDADE" in df_montados_para_comparar.columns:
+        df_montados_para_comparar = df_montados_para_comparar[df_montados_para_comparar["CIDADE"].isin(cidades_sel)]
+
 # Mesmos filtros de Estado/Data aplicados as CARGAS (nao tem coluna CIDADE)
 df_cargas_filtrado = df_cargas_bruto.copy()
 if not df_cargas_filtrado.empty:
@@ -1948,7 +1960,7 @@ def renderizar_montados():
         st.markdown('</div>', unsafe_allow_html=True)
         return
 
-    df_pendentes = calcular_pendentes_montados(df_filtrado, df_montados_filtrado)
+    df_pendentes = calcular_pendentes_montados(df_filtrado, df_montados_para_comparar)
 
     st.markdown('<div class="painel">', unsafe_allow_html=True)
     st.markdown('<p class="painel-titulo"><span class="ic">🌎</span>Montados x Liberados por Estado</p>', unsafe_allow_html=True)
@@ -2260,6 +2272,14 @@ def renderizar_pagina_estado(estado):
     if not df_mont_f.empty and datas_sel_e and "DATA_IMPORTACAO" in df_mont_f.columns:
         df_mont_f = df_mont_f[df_mont_f["DATA_IMPORTACAO"].astype(str).isin(datas_sel_e)]
 
+    # So com Cidade filtrada, SEM o filtro de Data de Importacao — usada so para
+    # achar "ficaram para tras" (um pedido pode ter sido liberado num dia e
+    # montado/importado em outro; comparar com o mesmo filtro de data dos dois
+    # lados fazia pedidos ja montados aparecerem errado como pendentes).
+    df_mont_f_comparar = df_mont_estado.copy()
+    if not df_mont_f_comparar.empty and cidades_sel_e and "CIDADE" in df_mont_f_comparar.columns:
+        df_mont_f_comparar = df_mont_f_comparar[df_mont_f_comparar["CIDADE"].isin(cidades_sel_e)]
+
     df_cargas_f = df_cargas_estado.copy()
     if not df_cargas_f.empty and datas_sel_e and "DATA_IMPORTACAO" in df_cargas_f.columns:
         df_cargas_f = df_cargas_f[df_cargas_f["DATA_IMPORTACAO"].astype(str).isin(datas_sel_e)]
@@ -2343,7 +2363,7 @@ def renderizar_pagina_estado(estado):
                      "Use a importacao individual acima e envie o arquivo de Montados deste estado.")
             st.markdown('</div>', unsafe_allow_html=True)
         else:
-            df_pendentes_e = calcular_pendentes_montados(df_lib_f, df_mont_f)
+            df_pendentes_e = calcular_pendentes_montados(df_lib_f, df_mont_f_comparar)
             total_mont_e = len(df_mont_f)
             total_lib_e = len(df_lib_f)
             total_pend_e = len(df_pendentes_e)
