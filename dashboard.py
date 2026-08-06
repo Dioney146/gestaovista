@@ -1802,16 +1802,17 @@ def tabela_cargas_resumo_estado(df_cargas):
         f'<tbody>{linhas}{linha_total}</tbody></table></div>'
     )
 
-def tabela_rotas_por_tipo_equipamento(df_cargas):
+def tabela_rotas_por_tipo_equipamento(df_cargas, coluna_pivot="ESTADO"):
     """Tabela premium com a quantidade de rotas por tipo de equipamento — uma
-    coluna por estado quando ha mais de um estado nos dados, senao uma coluna
-    unica de Total."""
+    coluna por valor de 'coluna_pivot' (ESTADO ou SUBFROTA) quando ha mais de um
+    valor distinto nos dados, senao uma coluna unica de Total."""
     if df_cargas.empty or "TIPOEQUIPAMENTO" not in df_cargas.columns:
         return None
 
-    tem_varios_estados = "ESTADO" in df_cargas.columns and df_cargas["ESTADO"].nunique() > 1
-    if tem_varios_estados:
-        pivot = df_cargas.pivot_table(index="TIPOEQUIPAMENTO", columns="ESTADO", values="IDROTA", aggfunc="count", fill_value=0)
+    tem_varios_valores = coluna_pivot in df_cargas.columns and df_cargas[coluna_pivot].astype(str).str.strip().replace("", pd.NA).dropna().nunique() > 1
+    if tem_varios_valores:
+        df_pivot_base = df_cargas[df_cargas[coluna_pivot].astype(str).str.strip() != ""] if coluna_pivot == "SUBFROTA" else df_cargas
+        pivot = df_pivot_base.pivot_table(index="TIPOEQUIPAMENTO", columns=coluna_pivot, values="IDROTA", aggfunc="count", fill_value=0)
         pivot["Total"] = pivot.sum(axis=1)
     else:
         pivot = df_cargas.groupby("TIPOEQUIPAMENTO").agg(Total=("IDROTA", "count"))
@@ -1970,30 +1971,42 @@ def renderizar_bloco_cargas_por_estado(df_cargas, contexto="ainda", chave="geral
                 f'<span class="ic">🔀</span>Por Subfrota ({" x ".join(subfrotas_presentes)})</p>',
                 unsafe_allow_html=True,
             )
-            fig_cruz = px.bar(
-                cruzado_df, x="TIPOEQUIPAMENTO", y="Rotas", color="SUBFROTA", barmode="group",
-                color_discrete_sequence=GRADIENTE_LARANJA + ["#60A5FA", "#34D399", "#F472B6"],
-                custom_data=["SUBFROTA"],
-            )
-            fig_cruz.update_traces(
-                marker_line_width=0,
-                hovertemplate="<b>%{x}</b> (%{customdata[0]})<br>Rotas: %{y}<extra></extra>",
-            )
-            fig_cruz.update_layout(
-                title_text="",
-                autosize=False,
-                height=320,
-                xaxis=dict(title=""),
-                yaxis=dict(title="Rotas"),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-                margin=dict(l=0, r=10, t=30, b=10),
-                transition_duration=0,
-            )
-            aplicar_tema_grafico(fig_cruz, titulo_size=1)
-            st.plotly_chart(
-                fig_cruz, use_container_width=True,
-                key=f"graf_tipo_subfrota_{chave}_{len(cruzado_df)}_{int(cruzado_df['Rotas'].sum())}",
-            )
+            col_graf_sub, col_tab_sub = st.columns([1.3, 1])
+            with col_graf_sub:
+                fig_cruz = px.bar(
+                    cruzado_df, x="TIPOEQUIPAMENTO", y="Rotas", color="SUBFROTA", barmode="group",
+                    color_discrete_sequence=GRADIENTE_LARANJA + ["#60A5FA", "#34D399", "#F472B6"],
+                    custom_data=["SUBFROTA"], text="Rotas",
+                )
+                fig_cruz.update_traces(
+                    marker_line_width=0,
+                    textposition="outside",
+                    textfont=dict(color="#FFFFFF", size=11),
+                    cliponaxis=False,
+                    hovertemplate="<b>%{x}</b> (%{customdata[0]})<br>Rotas: %{y}<extra></extra>",
+                )
+                fig_cruz.update_layout(
+                    title_text="",
+                    autosize=False,
+                    height=340,
+                    xaxis=dict(title=""),
+                    yaxis=dict(title="Rotas", range=[0, cruzado_df["Rotas"].max() * 1.25]),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    margin=dict(l=0, r=10, t=30, b=10),
+                    transition_duration=0,
+                )
+                aplicar_tema_grafico(fig_cruz, titulo_size=1)
+                st.plotly_chart(
+                    fig_cruz, use_container_width=True,
+                    key=f"graf_tipo_subfrota_{chave}_{len(cruzado_df)}_{int(cruzado_df['Rotas'].sum())}",
+                )
+            with col_tab_sub:
+                tabela_sub = tabela_rotas_por_tipo_equipamento(
+                    df_cargas[df_cargas["SUBFROTA"].astype(str).str.strip() != ""],
+                    coluna_pivot="SUBFROTA",
+                )
+                if tabela_sub:
+                    st.markdown(tabela_sub, unsafe_allow_html=True)
 
 def renderizar_montados():
     if df_montados_bruto.empty:
