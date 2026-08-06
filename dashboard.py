@@ -1549,6 +1549,26 @@ def renderizar_por_estados():
     # nao agrega nada (so tem uma barra) — nesse caso mostramos so a tabela e o mapa.
     somente_sp = set(estado_df["Estado"].astype(str)) == {"SP"}
 
+    # Quando os dados exibidos sao exclusivamente de um estado que distingue
+    # Liberados por subfrota (hoje so DF) e ha subfrota nos dados, o grafico
+    # "Valor por Estado" tambem nao agrega nada — nesse caso, no lugar dele,
+    # mostramos os pedidos separados por subfrota (com Total Geral).
+    estados_exibidos = set(estado_df["Estado"].astype(str))
+    tabela_subfrota_lib = None
+    if len(estados_exibidos) == 1:
+        (unico_estado,) = estados_exibidos
+        if unico_estado in SUBFROTAS_LIBERADOS_POR_ESTADO and "SUBFROTA" in df_filtrado.columns:
+            subfrotas_lib_presentes = sorted(
+                s for s in df_filtrado["SUBFROTA"].astype(str).str.strip().unique() if s
+            )
+            if len(subfrotas_lib_presentes) >= 2:
+                resumo_subfrota_lib = (
+                    df_filtrado[df_filtrado["SUBFROTA"].astype(str).str.strip() != ""]
+                    .groupby("SUBFROTA").agg(Pedidos=("NUMPED", "count"), Valor=("VLTOTAL", "sum"), Peso=("PESOBRUTOTOT", "sum"))
+                    .reset_index().rename(columns={"SUBFROTA": "Subfrota"}).sort_values("Valor", ascending=False)
+                )
+                tabela_subfrota_lib = (montar_tabela_com_total(resumo_subfrota_lib, "Subfrota", max_height=340), subfrotas_lib_presentes)
+
     if somente_sp:
         col_tabela, col_mapa = st.columns([1.1, 0.9])
     else:
@@ -1563,29 +1583,37 @@ def renderizar_por_estados():
     if not somente_sp:
         with col_grafico:
             st.markdown('<div class="painel">', unsafe_allow_html=True)
-            st.markdown('<p class="painel-titulo"><span class="ic">📈</span>Valor por Estado</p>', unsafe_allow_html=True)
-            fig_estado = px.bar(
-                estado_ordenado, x="Valor", y="Estado", orientation="h",
-                title="", color="Valor", color_continuous_scale=GRADIENTE_LARANJA,
-                custom_data=["Pedidos"],
-            )
-            fig_estado.update_traces(
-                marker_line_width=0,
-                text=estado_ordenado["Valor"].apply(fmt_brl),
-                textposition="outside",
-                textfont=dict(color="#FFFFFF", size=11),
-                cliponaxis=False,
-                hovertemplate="<b>%{y}</b><br>Valor: R$ %{x:,.2f}<br>Pedidos: %{customdata[0]}<extra></extra>",
-            )
-            fig_estado.update_layout(
-                yaxis=dict(autorange="reversed", title=""),
-                xaxis=dict(title="", tickprefix="R$ ", separatethousands=True, range=[0, estado_ordenado["Valor"].max() * 1.3]),
-                coloraxis_showscale=False,
-                height=340,
-                margin=dict(l=0, r=10, t=5, b=10),
-            )
-            aplicar_tema_grafico(fig_estado, titulo_size=1)
-            st.plotly_chart(fig_estado, use_container_width=True)
+            if tabela_subfrota_lib is not None:
+                tabela_html, subfrotas_lib_presentes = tabela_subfrota_lib
+                st.markdown(
+                    f'<p class="painel-titulo"><span class="ic">🔀</span>Pedidos por Subfrota ({" x ".join(subfrotas_lib_presentes)})</p>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(tabela_html, unsafe_allow_html=True)
+            else:
+                st.markdown('<p class="painel-titulo"><span class="ic">📈</span>Valor por Estado</p>', unsafe_allow_html=True)
+                fig_estado = px.bar(
+                    estado_ordenado, x="Valor", y="Estado", orientation="h",
+                    title="", color="Valor", color_continuous_scale=GRADIENTE_LARANJA,
+                    custom_data=["Pedidos"],
+                )
+                fig_estado.update_traces(
+                    marker_line_width=0,
+                    text=estado_ordenado["Valor"].apply(fmt_brl),
+                    textposition="outside",
+                    textfont=dict(color="#FFFFFF", size=11),
+                    cliponaxis=False,
+                    hovertemplate="<b>%{y}</b><br>Valor: R$ %{x:,.2f}<br>Pedidos: %{customdata[0]}<extra></extra>",
+                )
+                fig_estado.update_layout(
+                    yaxis=dict(autorange="reversed", title=""),
+                    xaxis=dict(title="", tickprefix="R$ ", separatethousands=True, range=[0, estado_ordenado["Valor"].max() * 1.3]),
+                    coloraxis_showscale=False,
+                    height=340,
+                    margin=dict(l=0, r=10, t=5, b=10),
+                )
+                aplicar_tema_grafico(fig_estado, titulo_size=1)
+                st.plotly_chart(fig_estado, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
     with col_mapa:
