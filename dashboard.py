@@ -1952,54 +1952,68 @@ def renderizar_bloco_cargas_por_estado(df_cargas, contexto="ainda", chave="geral
         key=f"graf_tipo_equipamento_{chave}_{len(tipo_df)}_{int(tipo_df['Rotas'].sum())}",
     )
 
-    # Quando o estado tem mais de uma subfrota nos dados (ex: DF = MT/DF, SP = 3P/MALHA),
-    # mostra tambem a quebra das tipologias por subfrota — mais informacao alem do
-    # grafico geral acima, sem substitui-lo.
-    if "SUBFROTA" in df_cargas.columns:
-        subfrotas_presentes = sorted(
-            s for s in df_cargas["SUBFROTA"].astype(str).str.strip().unique() if s
+def renderizar_linha_subfrota_tipologias(df_cargas, chave="geral"):
+    """Linha extra, no mesmo formato/tamanho do bloco geral (grafico a esquerda,
+    tabela a direita, cada um em seu proprio painel) — mostra as tipologias de
+    equipamento separadas por subfrota. So aparece para login por estado (nao
+    ADMIN) e quando o estado tem 2+ subfrotas nos dados (hoje SP e DF)."""
+    if is_admin or df_cargas.empty or "SUBFROTA" not in df_cargas.columns or "TIPOEQUIPAMENTO" not in df_cargas.columns:
+        return
+    subfrotas_presentes = sorted(
+        s for s in df_cargas["SUBFROTA"].astype(str).str.strip().unique() if s
+    )
+    if len(subfrotas_presentes) < 2:
+        return
+
+    df_com_subfrota = df_cargas[df_cargas["SUBFROTA"].astype(str).str.strip() != ""]
+    cruzado_df = df_com_subfrota.groupby(["TIPOEQUIPAMENTO", "SUBFROTA"]).agg(Rotas=("IDROTA", "count")).reset_index()
+    ordem_tipos = cruzado_df.groupby("TIPOEQUIPAMENTO")["Rotas"].sum().sort_values().index.tolist()
+
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    col_carg1_sub, col_carg2_sub = st.columns(2)
+    with col_carg1_sub:
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        st.markdown(
+            f'<p class="painel-titulo"><span class="ic">🔀</span>Tipos de Equipamento por Subfrota ({" x ".join(subfrotas_presentes)})</p>',
+            unsafe_allow_html=True,
         )
-        if len(subfrotas_presentes) >= 2:
-            cruzado_df = (
-                df_cargas[df_cargas["SUBFROTA"].astype(str).str.strip() != ""]
-                .groupby(["TIPOEQUIPAMENTO", "SUBFROTA"]).agg(Rotas=("IDROTA", "count"))
-                .reset_index()
-            )
-            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-            st.markdown(
-                f'<p class="painel-titulo" style="font-size:12.5px !important;">'
-                f'<span class="ic">🔀</span>Por Subfrota ({" x ".join(subfrotas_presentes)})</p>',
-                unsafe_allow_html=True,
-            )
-            col_graf_sub, col_espaco_sub = st.columns([1, 1])
-            with col_graf_sub:
-                fig_cruz = px.bar(
-                    cruzado_df, x="TIPOEQUIPAMENTO", y="Rotas", color="SUBFROTA", barmode="group",
-                    color_discrete_sequence=GRADIENTE_LARANJA + ["#60A5FA", "#34D399", "#F472B6"],
-                    custom_data=["SUBFROTA"], text="Rotas",
-                )
-                fig_cruz.update_traces(
-                    marker_line_width=0,
-                    textposition="outside",
-                    textfont=dict(color="#FFFFFF", size=11),
-                    cliponaxis=False,
-                    hovertemplate="<b>%{x}</b> (%{customdata[0]})<br>Rotas: %{y}<extra></extra>",
-                )
-                fig_cruz.update_layout(
-                    title_text="",
-                    autosize=False,
-                    height=340,
-                    xaxis=dict(title=""),
-                    yaxis=dict(title="Rotas", range=[0, cruzado_df["Rotas"].max() * 1.25]),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-                    margin=dict(l=0, r=10, t=30, b=10),
-                    transition_duration=0,
-                )
-                aplicar_tema_grafico(fig_cruz, titulo_size=1)
-                st.plotly_chart(
-                    fig_cruz, use_container_width=True,
-                    key=f"graf_tipo_subfrota_{chave}_{len(cruzado_df)}_{int(cruzado_df['Rotas'].sum())}",
-                )
+        fig_cruz = px.bar(
+            cruzado_df, x="Rotas", y="TIPOEQUIPAMENTO", orientation="h", color="SUBFROTA", barmode="group",
+            category_orders={"TIPOEQUIPAMENTO": ordem_tipos},
+            color_discrete_sequence=GRADIENTE_LARANJA + ["#60A5FA", "#34D399", "#F472B6"],
+            custom_data=["SUBFROTA"], text="Rotas",
+        )
+        fig_cruz.update_traces(
+            marker_line_width=0,
+            textposition="outside",
+            textfont=dict(color="#FFFFFF", size=11),
+            cliponaxis=False,
+            hovertemplate="<b>%{y}</b> (%{customdata[0]})<br>Rotas: %{x}<extra></extra>",
+        )
+        altura_grafico_sub = min(520, max(220, 42 * len(ordem_tipos) + 40))
+        fig_cruz.update_layout(
+            title_text="",
+            autosize=False,
+            height=altura_grafico_sub,
+            yaxis=dict(title=""),
+            xaxis=dict(title="", range=[0, cruzado_df["Rotas"].max() * 1.28]),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            margin=dict(l=0, r=10, t=30, b=10),
+            transition_duration=0,
+        )
+        aplicar_tema_grafico(fig_cruz, titulo_size=1)
+        st.plotly_chart(
+            fig_cruz, use_container_width=True,
+            key=f"graf_tipo_subfrota_{chave}_{len(cruzado_df)}_{int(cruzado_df['Rotas'].sum())}",
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+    with col_carg2_sub:
+        st.markdown('<div class="painel">', unsafe_allow_html=True)
+        st.markdown('<p class="painel-titulo"><span class="ic">🚚</span>Rotas por Tipo de Equipamento e Subfrota</p>', unsafe_allow_html=True)
+        tabela_sub = tabela_rotas_por_tipo_equipamento(df_com_subfrota, coluna_pivot="SUBFROTA")
+        if tabela_sub:
+            st.markdown(tabela_sub, unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 def renderizar_montados():
     if df_montados_bruto.empty:
@@ -2054,6 +2068,8 @@ def renderizar_montados():
         else:
             st.markdown(tabela_tipo, unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
+
+    renderizar_linha_subfrota_tipologias(df_cargas_filtrado, chave="dashboard_geral")
 
 def renderizar_cargas(df_cargas, titulo_geo="por Estado", mostrar_estado=True):
     """Renderiza os indicadores de CARGAS (rotas/equipamentos do RoadNet):
@@ -2461,6 +2477,8 @@ def renderizar_pagina_estado(estado):
             else:
                 st.markdown(tabela_tipo_e, unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
+
+        renderizar_linha_subfrota_tipologias(df_cargas_f, chave=f"pagina_{estado}")
 
     with tabs_estado[4]:
         renderizar_cargas(df_cargas_f, mostrar_estado=False)
