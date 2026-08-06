@@ -320,11 +320,19 @@ MAPA_UF_PARA_ESTADO = {
     "SP": ["SP", "SPW"],
 }
 
-# Estados em que o arquivo de CARGAS vem separado por subfrota (um arquivo por
-# subfrota, identificado pelo nome — ex: SP_3P.xlsx/SP_MALHA.xlsx,
+# Estados em que o arquivo de CARGAS vem separado por subfrota — um arquivo por
+# subfrota, identificado pelo nome (ex: SP_3P.xlsx/SP_MALHA.xlsx,
 # DF_DF.xlsx/DF_MT.xlsx). Os demais estados continuam com um unico arquivo.
-SUBFROTAS_CARGA_POR_ESTADO = {
+SUBFROTAS_POR_ESTADO = {
     "SP": ["3P", "MALHA"],
+    "DF": ["MT", "DF"],
+}
+
+# Estados em que os pedidos LIBERADOS tambem vem separados por subfrota — hoje
+# so DF (arquivos LIBERADOS_DF.xlsx/LIBERADOS_MT.xlsx). Deliberadamente separado
+# de SUBFROTAS_POR_ESTADO (que e so de Cargas) para nao afetar SP, que so
+# distingue subfrota em Cargas.
+SUBFROTAS_LIBERADOS_POR_ESTADO = {
     "DF": ["MT", "DF"],
 }
 
@@ -522,8 +530,11 @@ def renomear_colunas_liberados(df):
             renomeio[mapa_normalizado[chave]] = nome_canonico
     return df.rename(columns=renomeio)
 
-def tratar_dataframe(df):
-    """Aplica a limpeza padrao (numeros, datas, textos) em um dataframe de uma aba."""
+def tratar_dataframe(df, subfrota=None):
+    """Aplica a limpeza padrao (numeros, datas, textos) em um dataframe de uma aba.
+    subfrota: usado apenas nos estados configurados em SUBFROTAS_POR_ESTADO (hoje
+    so DF distingue Liberados por subfrota — arquivos LIBERADOS_DF.xlsx e
+    LIBERADOS_MT.xlsx); nos demais estados/arquivos fica em branco."""
     df = df.copy()
     df = renomear_colunas_liberados(df)
     df = df.fillna(0)
@@ -554,6 +565,7 @@ def tratar_dataframe(df):
         df = df[numped_valido]
 
     df = df.reset_index(drop=True)
+    df["SUBFROTA"] = subfrota if subfrota else ""
     return df
 
 # Mapeamento das colunas da planilha de MONTADOS (RoadNet) para os nomes padrao do sistema
@@ -628,7 +640,7 @@ def deduplicar_colunas(df):
 def tratar_dataframe_cargas(df, subfrota=None):
     """Limpeza dedicada para a planilha de CARGAS (rotas/equipamentos do RoadNet).
     Usa colunas totalmente diferentes das de Liberados/Montados.
-    subfrota: usado apenas nos estados configurados em SUBFROTAS_CARGA_POR_ESTADO
+    subfrota: usado apenas nos estados configurados em SUBFROTAS_POR_ESTADO
     (hoje SP e DF), marca cada linha com a subfrota identificada pelo nome do
     arquivo; nos demais estados fica em branco."""
     df = df.copy()
@@ -734,12 +746,13 @@ def detectar_estado_pelo_nome(nome_arquivo):
         return "SP"
     return None
 
-def detectar_subfrota_carga_pelo_nome(nome_arquivo, estado):
-    """Para estados configurados em SUBFROTAS_CARGA_POR_ESTADO (hoje SP e DF),
-    identifica de qual subfrota e o arquivo de CARGAS a partir do nome do arquivo
-    (ex: SP_3P.xlsx, SP_MALHA.xlsx, DF_DF.xlsx, DF_MT.xlsx). Os demais estados nao
-    usam essa distincao e continuam com um unico arquivo de cargas."""
-    subfrotas = SUBFROTAS_CARGA_POR_ESTADO.get(estado)
+def detectar_subfrota_pelo_nome(nome_arquivo, estado, mapa_subfrotas=None):
+    """Para estados configurados no mapa informado (SUBFROTAS_POR_ESTADO para
+    Cargas, por padrao; SUBFROTAS_LIBERADOS_POR_ESTADO para Liberados), identifica
+    de qual subfrota e o arquivo a partir do nome (ex: SP_3P.xlsx, DF_MT.xlsx,
+    LIBERADOS_DF.xlsx). Os demais estados nao usam essa distincao."""
+    mapa_subfrotas = mapa_subfrotas if mapa_subfrotas is not None else SUBFROTAS_POR_ESTADO
+    subfrotas = mapa_subfrotas.get(estado)
     if not subfrotas:
         return None
     nome = nome_arquivo.upper()
@@ -757,7 +770,7 @@ def detectar_tipo_pelo_nome(nome_arquivo, estado=None):
         return "LIBERADOS"
     if "CARGA" in nome or "ROTA" in nome:
         return "CARGAS"
-    if estado and detectar_subfrota_carga_pelo_nome(nome_arquivo, estado):
+    if estado and detectar_subfrota_pelo_nome(nome_arquivo, estado):
         return "CARGAS"
     return None
 
@@ -1161,13 +1174,17 @@ def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual, data_importac
             if tipo == "MONTADOS":
                 df_arquivo = tratar_dataframe_montados(df_bruto)
             elif tipo == "CARGAS":
-                # So estados configurados em SUBFROTAS_CARGA_POR_ESTADO (SP, DF)
+                # So estados configurados em SUBFROTAS_POR_ESTADO (SP, DF)
                 # distinguem subfrota pelo nome do arquivo; os demais seguem com
                 # um unico arquivo de cargas.
-                subfrota = detectar_subfrota_carga_pelo_nome(arquivo.name, estado)
+                subfrota = detectar_subfrota_pelo_nome(arquivo.name, estado)
                 df_arquivo = tratar_dataframe_cargas(df_bruto, subfrota=subfrota)
             else:
-                df_arquivo = tratar_dataframe(df_bruto)
+                # LIBERADOS: so DF (LIBERADOS_DF.xlsx/LIBERADOS_MT.xlsx) distingue
+                # subfrota pelo nome do arquivo (config separada de Cargas, para
+                # nao afetar SP); nos demais estados fica em branco.
+                subfrota = detectar_subfrota_pelo_nome(arquivo.name, estado, SUBFROTAS_LIBERADOS_POR_ESTADO)
+                df_arquivo = tratar_dataframe(df_bruto, subfrota=subfrota)
             df_arquivo["ESTADO"] = estado
             agrupados.setdefault((estado, tipo), []).append(df_arquivo)
         except Exception as e:
@@ -1227,7 +1244,8 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
             value=datetime.date.today(), format="DD/MM/YYYY", key="data_individual_sel"
         )
 
-        subfrotas_estado_individual = SUBFROTAS_CARGA_POR_ESTADO.get(estado_individual)
+        subfrotas_estado_individual = SUBFROTAS_POR_ESTADO.get(estado_individual)
+        subfrotas_liberados_estado_individual = SUBFROTAS_LIBERADOS_POR_ESTADO.get(estado_individual)
         rotulo_uploader = (
             f"Liberados, Montados e Cargas ({' e '.join(f'{estado_individual}_{s}' for s in subfrotas_estado_individual)}) - {estado_individual}"
             if subfrotas_estado_individual
@@ -1240,6 +1258,9 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
         if subfrotas_estado_individual:
             nomes_exemplo = " e ".join(f"**{estado_individual}_{s}**" for s in subfrotas_estado_individual)
             st.caption(f"Para Cargas de {estado_individual}, envie os arquivos separados por subfrota: {nomes_exemplo}.")
+        if subfrotas_liberados_estado_individual:
+            nomes_exemplo_lib = " e ".join(f"**LIBERADOS_{s}**" for s in subfrotas_liberados_estado_individual)
+            st.caption(f"Para Liberados de {estado_individual}, envie os arquivos separados por subfrota: {nomes_exemplo_lib}.")
 
         if st.button(f"Processar dados de {estado_individual}", type="primary", use_container_width=True):
             if not arquivos_individual:
@@ -1263,7 +1284,8 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
 
         arquivos = st.file_uploader(
             "Arraste os arquivos de LIBERADOS, MONTADOS e CARGAS de todos os estados aqui — estado e tipo sao identificados automaticamente "
-            "(para Cargas de SP, envie SP_3P e SP_MALHA separadamente; para DF, envie DF_DF e DF_MT separadamente)",
+            "(para Cargas de SP, envie SP_3P e SP_MALHA separadamente; para Cargas de DF, envie DF_DF e DF_MT; "
+            "para Liberados de DF, envie LIBERADOS_DF e LIBERADOS_MT)",
             type=["xlsx", "xls", "csv"],
             accept_multiple_files=True,
             key="up_combinado",
@@ -2037,10 +2059,10 @@ def renderizar_montados():
     st.markdown('</div>', unsafe_allow_html=True)
 
     estados_presentes_cargas = set(df_cargas_filtrado.get("ESTADO", pd.Series(dtype=str)).unique())
-    for estado_subfrota in SUBFROTAS_CARGA_POR_ESTADO:
+    for estado_subfrota in SUBFROTAS_POR_ESTADO:
         if estado_subfrota not in estados_presentes_cargas:
             continue
-        rotulo_subfrotas = " x ".join(SUBFROTAS_CARGA_POR_ESTADO[estado_subfrota])
+        rotulo_subfrotas = " x ".join(SUBFROTAS_POR_ESTADO[estado_subfrota])
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
         st.markdown('<div class="painel">', unsafe_allow_html=True)
         st.markdown(f'<p class="painel-titulo"><span class="ic">🚚</span>Cargas de {estado_subfrota} por Subfrota ({rotulo_subfrotas})</p>', unsafe_allow_html=True)
@@ -2362,6 +2384,28 @@ def renderizar_pagina_estado(estado):
     with c3:
         st.markdown(kpi_card_premium("⚖️", "Peso Total", fmt_kg(total_peso_e), label_estado, serie_diaria(df_lib_f, "PESOBRUTOTOT", "sum")), unsafe_allow_html=True)
 
+    # Quando o estado distingue Liberados por subfrota (hoje so DF), mostra os
+    # mesmos quantitativos (Pedidos/Valor/Peso) separados por subfrota, alem do
+    # geral acima — usa "Subfrota" e nao "Estado" como rotulo da linha.
+    if estado in SUBFROTAS_LIBERADOS_POR_ESTADO and "SUBFROTA" in df_lib_f.columns:
+        subfrotas_lib_presentes = sorted(
+            s for s in df_lib_f["SUBFROTA"].astype(str).str.strip().unique() if s
+        )
+        if len(subfrotas_lib_presentes) >= 2:
+            st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+            st.markdown('<div class="painel">', unsafe_allow_html=True)
+            st.markdown(
+                f'<p class="painel-titulo"><span class="ic">🔀</span>Pedidos Liberados por Subfrota ({" x ".join(subfrotas_lib_presentes)})</p>',
+                unsafe_allow_html=True,
+            )
+            resumo_subfrota_lib = (
+                df_lib_f[df_lib_f["SUBFROTA"].astype(str).str.strip() != ""]
+                .groupby("SUBFROTA").agg(Pedidos=("NUMPED", "count"), Valor=("VLTOTAL", "sum"), Peso=("PESOBRUTOTOT", "sum"))
+                .reset_index().rename(columns={"SUBFROTA": "Subfrota"}).sort_values("Valor", ascending=False)
+            )
+            st.markdown(montar_tabela_com_total(resumo_subfrota_lib, "Subfrota", max_height=220), unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
     tabs_estado = st.tabs(["Por Municipio", "Por Praca", "Detalhes dos Pedidos", "Montados x Liberados", "Cargas"])
@@ -2448,8 +2492,8 @@ def renderizar_pagina_estado(estado):
                 st.markdown(f"**Pedidos liberados de {label_estado} que ainda nao foram montados:**")
                 st.markdown(tabela_premium_html(formatar_tabela(df_pendentes_e[[c for c in COLUNAS_EXIB_E if c in df_pendentes_e.columns]])), unsafe_allow_html=True)
 
-        if estado in SUBFROTAS_CARGA_POR_ESTADO:
-            rotulo_subfrotas_e = " x ".join(SUBFROTAS_CARGA_POR_ESTADO[estado])
+        if estado in SUBFROTAS_POR_ESTADO:
+            rotulo_subfrotas_e = " x ".join(SUBFROTAS_POR_ESTADO[estado])
             st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
             st.markdown('<div class="painel">', unsafe_allow_html=True)
             st.markdown(f'<p class="painel-titulo"><span class="ic">🚚</span>Cargas de {estado} por Subfrota ({rotulo_subfrotas_e})</p>', unsafe_allow_html=True)
