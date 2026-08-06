@@ -1550,9 +1550,10 @@ def renderizar_por_estados():
     somente_sp = set(estado_df["Estado"].astype(str)) == {"SP"}
 
     # Quando os dados exibidos sao exclusivamente de um estado que distingue
-    # Liberados por subfrota (hoje so DF) e ha subfrota nos dados, o grafico
-    # "Valor por Estado" tambem nao agrega nada — nesse caso, no lugar dele,
-    # mostramos os pedidos separados por subfrota (com Total Geral).
+    # Liberados por subfrota (hoje so DF) e ha subfrota nos dados: nem o "Resumo
+    # por Estado" (so uma linha + Total Geral) nem o grafico "Valor por Estado"
+    # agregam nada — nesse caso mostramos so os pedidos separados por subfrota
+    # (com Total Geral) e o mapa.
     estados_exibidos = set(estado_df["Estado"].astype(str))
     tabela_subfrota_lib = None
     if len(estados_exibidos) == 1:
@@ -1569,51 +1570,51 @@ def renderizar_por_estados():
                 )
                 tabela_subfrota_lib = (montar_tabela_com_total(resumo_subfrota_lib, "Subfrota", max_height=340), subfrotas_lib_presentes)
 
-    if somente_sp:
+    if somente_sp or tabela_subfrota_lib is not None:
         col_tabela, col_mapa = st.columns([1.1, 0.9])
     else:
         col_tabela, col_grafico, col_mapa = st.columns([1.05, 1.05, 0.95])
 
     with col_tabela:
         st.markdown('<div class="painel">', unsafe_allow_html=True)
-        st.markdown('<p class="painel-titulo"><span class="ic">📄</span>Resumo por Estado</p>', unsafe_allow_html=True)
-        st.markdown(montar_tabela_com_total(estado_df, "Estado", max_height=340), unsafe_allow_html=True)
+        if tabela_subfrota_lib is not None:
+            tabela_html, subfrotas_lib_presentes = tabela_subfrota_lib
+            st.markdown(
+                f'<p class="painel-titulo"><span class="ic">🔀</span>Pedidos por Subfrota ({" x ".join(subfrotas_lib_presentes)})</p>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(tabela_html, unsafe_allow_html=True)
+        else:
+            st.markdown('<p class="painel-titulo"><span class="ic">📄</span>Resumo por Estado</p>', unsafe_allow_html=True)
+            st.markdown(montar_tabela_com_total(estado_df, "Estado", max_height=340), unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    if not somente_sp:
+    if not somente_sp and tabela_subfrota_lib is None:
         with col_grafico:
             st.markdown('<div class="painel">', unsafe_allow_html=True)
-            if tabela_subfrota_lib is not None:
-                tabela_html, subfrotas_lib_presentes = tabela_subfrota_lib
-                st.markdown(
-                    f'<p class="painel-titulo"><span class="ic">🔀</span>Pedidos por Subfrota ({" x ".join(subfrotas_lib_presentes)})</p>',
-                    unsafe_allow_html=True,
-                )
-                st.markdown(tabela_html, unsafe_allow_html=True)
-            else:
-                st.markdown('<p class="painel-titulo"><span class="ic">📈</span>Valor por Estado</p>', unsafe_allow_html=True)
-                fig_estado = px.bar(
-                    estado_ordenado, x="Valor", y="Estado", orientation="h",
-                    title="", color="Valor", color_continuous_scale=GRADIENTE_LARANJA,
-                    custom_data=["Pedidos"],
-                )
-                fig_estado.update_traces(
-                    marker_line_width=0,
-                    text=estado_ordenado["Valor"].apply(fmt_brl),
-                    textposition="outside",
-                    textfont=dict(color="#FFFFFF", size=11),
-                    cliponaxis=False,
-                    hovertemplate="<b>%{y}</b><br>Valor: R$ %{x:,.2f}<br>Pedidos: %{customdata[0]}<extra></extra>",
-                )
-                fig_estado.update_layout(
-                    yaxis=dict(autorange="reversed", title=""),
-                    xaxis=dict(title="", tickprefix="R$ ", separatethousands=True, range=[0, estado_ordenado["Valor"].max() * 1.3]),
-                    coloraxis_showscale=False,
-                    height=340,
-                    margin=dict(l=0, r=10, t=5, b=10),
-                )
-                aplicar_tema_grafico(fig_estado, titulo_size=1)
-                st.plotly_chart(fig_estado, use_container_width=True)
+            st.markdown('<p class="painel-titulo"><span class="ic">📈</span>Valor por Estado</p>', unsafe_allow_html=True)
+            fig_estado = px.bar(
+                estado_ordenado, x="Valor", y="Estado", orientation="h",
+                title="", color="Valor", color_continuous_scale=GRADIENTE_LARANJA,
+                custom_data=["Pedidos"],
+            )
+            fig_estado.update_traces(
+                marker_line_width=0,
+                text=estado_ordenado["Valor"].apply(fmt_brl),
+                textposition="outside",
+                textfont=dict(color="#FFFFFF", size=11),
+                cliponaxis=False,
+                hovertemplate="<b>%{y}</b><br>Valor: R$ %{x:,.2f}<br>Pedidos: %{customdata[0]}<extra></extra>",
+            )
+            fig_estado.update_layout(
+                yaxis=dict(autorange="reversed", title=""),
+                xaxis=dict(title="", tickprefix="R$ ", separatethousands=True, range=[0, estado_ordenado["Valor"].max() * 1.3]),
+                coloraxis_showscale=False,
+                height=340,
+                margin=dict(l=0, r=10, t=5, b=10),
+            )
+            aplicar_tema_grafico(fig_estado, titulo_size=1)
+            st.plotly_chart(fig_estado, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
     with col_mapa:
@@ -2237,6 +2238,20 @@ def renderizar_mapa_interativo(chave, mostrar_titulo=True, altura=480):
     valor_por_estado_sistema = df_filtrado.groupby("ESTADO")["VLTOTAL"].sum().to_dict() if "ESTADO" in df_filtrado.columns else {}
     pedidos_por_estado_sistema = df_filtrado.groupby("ESTADO")["NUMPED"].count().to_dict() if "ESTADO" in df_filtrado.columns else {}
 
+    # Caso especial, so em DF: a subfrota "MT" representa entregas em Mato Grosso,
+    # entao esse valor sai da UF "DF" e aparece na UF real "MT" no mapa.
+    valor_mt_real = 0
+    pedidos_mt_real = 0
+    if "SUBFROTA" in df_filtrado.columns and "ESTADO" in df_filtrado.columns:
+        df_subfrota_mt = df_filtrado[
+            (df_filtrado["ESTADO"] == "DF") & (df_filtrado["SUBFROTA"].astype(str).str.strip() == "MT")
+        ]
+        if not df_subfrota_mt.empty:
+            valor_mt_real = df_subfrota_mt["VLTOTAL"].sum()
+            pedidos_mt_real = df_subfrota_mt["NUMPED"].count()
+            valor_por_estado_sistema["DF"] = valor_por_estado_sistema.get("DF", 0) - valor_mt_real
+            pedidos_por_estado_sistema["DF"] = pedidos_por_estado_sistema.get("DF", 0) - pedidos_mt_real
+
     # UFs do mapa cujo estado do sistema esta atualmente selecionado no filtro
     ufs_selecionadas = [
         uf for uf, siglas in MAPA_UF_PARA_ESTADO.items()
@@ -2249,9 +2264,14 @@ def renderizar_mapa_interativo(chave, mostrar_titulo=True, altura=480):
         siglas_sistema = MAPA_UF_PARA_ESTADO.get(sigla_uf, [])
         valor = sum(valor_por_estado_sistema.get(s, 0) for s in siglas_sistema)
         pedidos = sum(pedidos_por_estado_sistema.get(s, 0) for s in siglas_sistema)
+        tem_dados = siglas_sistema != []
+        if sigla_uf == "MT" and valor_mt_real:
+            valor += valor_mt_real
+            pedidos += pedidos_mt_real
+            tem_dados = True
         linhas_mapa.append({
             "UF": sigla_uf, "Valor": valor, "Pedidos": pedidos,
-            "TemDados": siglas_sistema != [], "Selecionado": sigla_uf in ufs_selecionadas,
+            "TemDados": tem_dados, "Selecionado": sigla_uf in ufs_selecionadas,
         })
 
     df_mapa = pd.DataFrame(linhas_mapa)
