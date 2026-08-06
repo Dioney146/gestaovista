@@ -1951,6 +1951,50 @@ def renderizar_bloco_cargas_por_estado(df_cargas, contexto="ainda", chave="geral
         key=f"graf_tipo_equipamento_{chave}_{len(tipo_df)}_{int(tipo_df['Rotas'].sum())}",
     )
 
+    # Quando o estado tem mais de uma subfrota nos dados (ex: DF = MT/DF, SP = 3P/MALHA),
+    # mostra tambem a quebra das tipologias por subfrota — mais informacao alem do
+    # grafico geral acima, sem substitui-lo.
+    if "SUBFROTA" in df_cargas.columns:
+        subfrotas_presentes = sorted(
+            s for s in df_cargas["SUBFROTA"].astype(str).str.strip().unique() if s
+        )
+        if len(subfrotas_presentes) >= 2:
+            cruzado_df = (
+                df_cargas[df_cargas["SUBFROTA"].astype(str).str.strip() != ""]
+                .groupby(["TIPOEQUIPAMENTO", "SUBFROTA"]).agg(Rotas=("IDROTA", "count"))
+                .reset_index()
+            )
+            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+            st.markdown(
+                f'<p class="painel-titulo" style="font-size:12.5px !important;">'
+                f'<span class="ic">🔀</span>Por Subfrota ({" x ".join(subfrotas_presentes)})</p>',
+                unsafe_allow_html=True,
+            )
+            fig_cruz = px.bar(
+                cruzado_df, x="TIPOEQUIPAMENTO", y="Rotas", color="SUBFROTA", barmode="group",
+                color_discrete_sequence=GRADIENTE_LARANJA + ["#60A5FA", "#34D399", "#F472B6"],
+                custom_data=["SUBFROTA"],
+            )
+            fig_cruz.update_traces(
+                marker_line_width=0,
+                hovertemplate="<b>%{x}</b> (%{customdata[0]})<br>Rotas: %{y}<extra></extra>",
+            )
+            fig_cruz.update_layout(
+                title_text="",
+                autosize=False,
+                height=320,
+                xaxis=dict(title=""),
+                yaxis=dict(title="Rotas"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                margin=dict(l=0, r=10, t=30, b=10),
+                transition_duration=0,
+            )
+            aplicar_tema_grafico(fig_cruz, titulo_size=1)
+            st.plotly_chart(
+                fig_cruz, use_container_width=True,
+                key=f"graf_tipo_subfrota_{chave}_{len(cruzado_df)}_{int(cruzado_df['Rotas'].sum())}",
+            )
+
 def renderizar_montados():
     if df_montados_bruto.empty:
         st.markdown('<div class="glass-box">', unsafe_allow_html=True)
