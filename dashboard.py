@@ -1971,7 +1971,7 @@ def renderizar_bloco_cargas_por_estado(df_cargas, contexto="ainda", chave="geral
                 f'<span class="ic">🔀</span>Por Subfrota ({" x ".join(subfrotas_presentes)})</p>',
                 unsafe_allow_html=True,
             )
-            col_graf_sub, col_tab_sub = st.columns([1.3, 1])
+            col_graf_sub, col_espaco_sub, col_tab_sub = st.columns([1.3, 0.15, 1])
             with col_graf_sub:
                 fig_cruz = px.bar(
                     cruzado_df, x="TIPOEQUIPAMENTO", y="Rotas", color="SUBFROTA", barmode="group",
