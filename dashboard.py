@@ -53,7 +53,6 @@ footer {visibility: hidden;}
 html, body, .stApp {
     background-color: var(--bg-base) !important;
     font-family: 'Inter', sans-serif !important;
-    min-height: 100vh;
 }
 
 /* ---------- FUNDO EM CAMADAS ---------- */
@@ -70,14 +69,14 @@ html, body, .stApp {
         radial-gradient(circle at 85% 85%, rgba(245,158,11,0.07), transparent 45%);
     background-color: var(--bg-base);
 }
-[data-testid="stAppViewContainer"] { background: transparent !important; position: relative; z-index: 1; min-height: 100vh; }
+[data-testid="stAppViewContainer"] { background: transparent !important; position: relative; z-index: 1; }
 [data-testid="stMain"], [data-testid="stMainBlockContainer"], .main, .main > div { background-color: transparent !important; }
-/* min-height:100vh aqui de novo: sem isso, abas com pouco conteudo (ex: "Por
-   Estados" mostrando so 1-2 estados) deixavam uma sobra vazia enorme abaixo do
-   conteudo em telas grandes, sem preencher a tela. Com box-sizing:border-box
-   global (regra * no topo deste CSS), o padding fica DENTRO desse 100vh — nao
-   soma por cima — entao nao volta a "esticar" além de uma tela so. */
-.block-container { padding: 1rem 1.6rem 1.4rem 1.6rem !important; max-width: 100% !important; position: relative; z-index: 1; min-height: 100vh; }
+/* Sem min-height forcado em nenhum nivel (html/body/.stApp/stAppViewContainer/
+   block-container): o fundo e position:fixed, entao ele ja cobre a tela toda
+   sozinho, em qualquer posicao de rolagem, sem precisar que o documento tenha
+   uma altura minima. Forcar altura minima so criava espaco vazio ROLAVEL extra
+   depois do fim do conteudo (a pagina ficava mais alta que o conteudo real). */
+.block-container { padding: 1rem 1.6rem 1.4rem 1.6rem !important; max-width: 100% !important; position: relative; z-index: 1; }
 
 /* Particulas discretas */
 .particulas { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
