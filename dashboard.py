@@ -327,6 +327,16 @@ SUBFROTAS_LIBERADOS_POR_ESTADO = {
     "MG_ES": ["ES", "MG"],
 }
 
+# Estados em que os pedidos MONTADOS tambem vem separados por subfrota — hoje so
+# MG_ES, que passou a receber tres arquivos (MONTADOS_MG.xlsx,
+# MONTADOS_MG.N.xlsx, MONTADOS_ES.xlsx) no lugar do unico arquivo combinado
+# anterior (MONTADOS_MG.ES.xlsx). "MG.N" e checado antes de "MG" para nao ser
+# confundido com o token mais generico. No final, os tres sao somados num unico
+# total de Montados do estado, do mesmo jeito que ja acontecia antes.
+SUBFROTAS_MONTADOS_POR_ESTADO = {
+    "MG_ES": ["MG.N", "ES", "MG"],
+}
+
 # Pares (estado do sistema, subfrota) cujo valor deve ser exibido no mapa numa
 # UF real diferente da UF padrao do estado — ex: a subfrota "MT" de DF
 # representa entregas em Mato Grosso; a subfrota "ES" de MG_ES representa
@@ -584,10 +594,14 @@ COLUNAS_MONTADOS = {
     "Estado da Ordem":  "STATUS_MONTADO",
 }
 
-def tratar_dataframe_montados(df):
-    """Limpeza dedicada para a planilha de MONTADOS, que usa colunas diferentes da de Liberados."""
+def tratar_dataframe_montados(df, subfrota=None):
+    """Limpeza dedicada para a planilha de MONTADOS, que usa colunas diferentes da de Liberados.
+    subfrota: usado apenas nos estados configurados em SUBFROTAS_MONTADOS_POR_ESTADO
+    (hoje so MG_ES, arquivos MONTADOS_MG.xlsx/MONTADOS_MG.N.xlsx/MONTADOS_ES.xlsx);
+    nos demais estados fica em branco."""
     df = df.copy()
     df = df.rename(columns={k: v for k, v in COLUNAS_MONTADOS.items() if k in df.columns})
+    df = deduplicar_colunas(df)
     df = df.fillna(0)
 
     for col in ["VLTOTAL", "PESOBRUTOTOT"]:
@@ -611,6 +625,7 @@ def tratar_dataframe_montados(df):
         df = df.drop_duplicates(subset=["NUMPED"])
 
     df = df.reset_index(drop=True)
+    df["SUBFROTA"] = subfrota if subfrota else ""
     return df
 
 # Mapeamento das colunas da planilha de CARGAS (rotas do RoadNet) para os nomes padrao do sistema
@@ -1174,7 +1189,11 @@ def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual, data_importac
             )
 
             if tipo == "MONTADOS":
-                df_arquivo = tratar_dataframe_montados(df_bruto)
+                # So MG_ES (MONTADOS_MG.xlsx/MONTADOS_MG.N.xlsx/MONTADOS_ES.xlsx)
+                # distingue subfrota pelo nome do arquivo; nos demais estados fica
+                # em branco e segue com um unico arquivo de montados.
+                subfrota_mont = detectar_subfrota_pelo_nome(arquivo.name, estado, SUBFROTAS_MONTADOS_POR_ESTADO)
+                df_arquivo = tratar_dataframe_montados(df_bruto, subfrota=subfrota_mont)
             elif tipo == "CARGAS":
                 # So estados configurados em SUBFROTAS_POR_ESTADO (SP, DF)
                 # distinguem subfrota pelo nome do arquivo; os demais seguem com
@@ -1248,6 +1267,7 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
 
         subfrotas_estado_individual = SUBFROTAS_POR_ESTADO.get(estado_individual)
         subfrotas_liberados_estado_individual = SUBFROTAS_LIBERADOS_POR_ESTADO.get(estado_individual)
+        subfrotas_montados_estado_individual = SUBFROTAS_MONTADOS_POR_ESTADO.get(estado_individual)
         rotulo_uploader = (
             f"Liberados, Montados e Cargas ({' e '.join(f'{estado_individual}_{s}' for s in subfrotas_estado_individual)}) - {estado_individual}"
             if subfrotas_estado_individual
@@ -1263,6 +1283,9 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
         if subfrotas_liberados_estado_individual:
             nomes_exemplo_lib = " e ".join(f"**LIBERADOS_{s}**" for s in subfrotas_liberados_estado_individual)
             st.caption(f"Para Liberados de {estado_individual}, envie os arquivos separados por subfrota: {nomes_exemplo_lib}.")
+        if subfrotas_montados_estado_individual:
+            nomes_exemplo_mont = ", ".join(f"**MONTADOS_{s}**" for s in subfrotas_montados_estado_individual)
+            st.caption(f"Para Montados de {estado_individual}, envie os arquivos separados por subfrota: {nomes_exemplo_mont}. No final, os valores sao somados num total unico.")
 
         if st.button(f"Processar dados de {estado_individual}", type="primary", use_container_width=True):
             if not arquivos_individual:
@@ -1287,7 +1310,8 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
         arquivos = st.file_uploader(
             "Arraste os arquivos de LIBERADOS, MONTADOS e CARGAS de todos os estados aqui — estado e tipo sao identificados automaticamente "
             "(para Cargas de SP, envie SP_3P e SP_MALHA separadamente; para Cargas de DF, envie DF_DF e DF_MT; "
-            "para Liberados de DF, envie LIBERADOS_DF e LIBERADOS_MT)",
+            "para Liberados de DF, envie LIBERADOS_DF e LIBERADOS_MT; "
+            "para MG_ES, envie LIBERADOS_MG e LIBERADOS_ES, e MONTADOS_MG, MONTADOS_MG.N e MONTADOS_ES separadamente)",
             type=["xlsx", "xls", "csv"],
             accept_multiple_files=True,
             key="up_combinado",
