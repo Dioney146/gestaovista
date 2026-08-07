@@ -538,6 +538,7 @@ def tratar_dataframe(df, subfrota=None):
     LIBERADOS_MT.xlsx); nos demais estados/arquivos fica em branco."""
     df = df.copy()
     df = renomear_colunas_liberados(df)
+    df = deduplicar_colunas(df)
     df = df.fillna(0)
 
     for col in ["VLTOTAL", "PESOBRUTOTOT"]:
@@ -1388,7 +1389,11 @@ def montar_df_geral(chave):
     ]
     if not partes:
         return pd.DataFrame()
-    return pd.concat(partes, ignore_index=True)
+    # Protecao extra: mesmo se algum estado ja tiver ficado com coluna duplicada
+    # em sessao anterior (antes desta correcao), deduplica aqui tambem, para o
+    # concat nunca quebrar com 'Reindexing only valid with uniquely valued Index
+    # objects'.
+    return deduplicar_colunas(pd.concat([deduplicar_colunas(p) for p in partes], ignore_index=True))
 
 if not dados_visiveis():
     if is_admin:
