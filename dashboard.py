@@ -66,23 +66,9 @@ html, body, .stApp {
     inset: 0;
     z-index: 0;
     background-image:
-        radial-gradient(circle at 15% 10%, rgba(59,130,246,0.10), transparent 45%),
-        radial-gradient(circle at 85% 85%, rgba(245,158,11,0.08), transparent 45%),
-        linear-gradient(180deg, rgba(5,7,10,0.75) 0%, rgba(5,7,10,0.92) 55%, rgba(5,7,10,0.98) 100%),
-        url("https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d");
-    background-size: cover;
-    background-position: center;
-    background-attachment: fixed;
-    filter: blur(3px) saturate(0.9);
-    transform: scale(1.03);
-}
-.stApp::after {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    pointer-events: none;
-    background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.65) 100%);
+        radial-gradient(circle at 15% 10%, rgba(59,130,246,0.08), transparent 45%),
+        radial-gradient(circle at 85% 85%, rgba(245,158,11,0.07), transparent 45%);
+    background-color: var(--bg-base);
 }
 [data-testid="stAppViewContainer"] { background: transparent !important; position: relative; z-index: 1; min-height: 100vh; }
 [data-testid="stMain"], [data-testid="stMainBlockContainer"], .main, .main > div { background-color: transparent !important; }
@@ -304,36 +290,51 @@ ESTADOS_LABELS = {
     "AM":    "Amazonas (AM)",
     "BA":    "Bahia (BA)",
     "DF":    "Distrito Federal (DF)",
-    "MG":    "Minas Gerais (MG)",
-    "ES":    "Espirito Santo (ES)",
+    "MG_ES": "Minas Gerais + Espirito Santo (MG_ES)",
     "SP":    "Sao Paulo (SP)",
     "SPW":   "Sao Paulo WFS (SPW)",
 }
 
-# UF real no mapa -> sigla(s) usada(s) no nosso sistema
+# UF real no mapa -> sigla(s) usada(s) no nosso sistema. MG_ES e um unico estado
+# do sistema que cobre DUAS UFs reais (MG e ES); "MG" fica como a UF padrao (o
+# que nao for marcado como subfrota "ES" cai aqui) e a UF real "ES" recebe sua
+# fatia via SUBFROTA_UF_REAL, no mapa (mesmo mecanismo usado para DF/MT).
 MAPA_UF_PARA_ESTADO = {
     "AM": ["AM"],
     "BA": ["BA"],
     "DF": ["DF"],
-    "MG": ["MG"],
-    "ES": ["ES"],
+    "MG": ["MG_ES"],
     "SP": ["SP", "SPW"],
 }
 
 # Estados em que o arquivo de CARGAS vem separado por subfrota — um arquivo por
 # subfrota, identificado pelo nome (ex: SP_3P.xlsx/SP_MALHA.xlsx,
-# DF_DF.xlsx/DF_MT.xlsx). Os demais estados continuam com um unico arquivo.
+# DF_DF.xlsx/DF_MT.xlsx, ES.xlsx/MG.xlsx). Os demais estados continuam com um
+# unico arquivo.
 SUBFROTAS_POR_ESTADO = {
     "SP": ["3P", "MALHA"],
     "DF": ["MT", "DF"],
+    "MG_ES": ["ES", "MG"],
 }
 
-# Estados em que os pedidos LIBERADOS tambem vem separados por subfrota — hoje
-# so DF (arquivos LIBERADOS_DF.xlsx/LIBERADOS_MT.xlsx). Deliberadamente separado
-# de SUBFROTAS_POR_ESTADO (que e so de Cargas) para nao afetar SP, que so
+# Estados em que os pedidos LIBERADOS tambem vem separados por subfrota — DF
+# (arquivos LIBERADOS_DF.xlsx/LIBERADOS_MT.xlsx) e MG_ES (arquivos que
+# identifiquem MG ou ES no nome). Deliberadamente separado de
+# SUBFROTAS_POR_ESTADO (que e so de Cargas) para nao afetar SP, que so
 # distingue subfrota em Cargas.
 SUBFROTAS_LIBERADOS_POR_ESTADO = {
     "DF": ["MT", "DF"],
+    "MG_ES": ["ES", "MG"],
+}
+
+# Pares (estado do sistema, subfrota) cujo valor deve ser exibido no mapa numa
+# UF real diferente da UF padrao do estado — ex: a subfrota "MT" de DF
+# representa entregas em Mato Grosso; a subfrota "ES" de MG_ES representa
+# Espirito Santo. O restante (sem essa subfrota) fica na UF padrao do estado em
+# MAPA_UF_PARA_ESTADO.
+SUBFROTA_UF_REAL = {
+    ("DF", "MT"): "MT",
+    ("MG_ES", "ES"): "ES",
 }
 
 # ==================================================
@@ -733,9 +734,9 @@ def detectar_estado_pelo_nome(nome_arquivo):
     if tem(r'(?<![A-Z0-9])(WFS|SPW)(?![A-Z0-9])'):
         return "SPW"
     if tem(r'(?<![A-Z0-9])ES(?![A-Z0-9])') or "ESPIRITO SANTO" in nome:
-        return "ES"
+        return "MG_ES"
     if tem(r'(?<![A-Z0-9])MG(?![A-Z0-9])') or "MINAS GERAIS" in nome:
-        return "MG"
+        return "MG_ES"
     if tem(r'D[\.\-_ ]?F(?![A-Z0-9])') or "DISTRITO FEDERAL" in nome:
         return "DF"
     if tem(r'(?<![A-Z0-9])BA(?![A-Z0-9])') or "BAHIA" in nome:
@@ -2238,19 +2239,25 @@ def renderizar_mapa_interativo(chave, mostrar_titulo=True, altura=480):
     valor_por_estado_sistema = df_filtrado.groupby("ESTADO")["VLTOTAL"].sum().to_dict() if "ESTADO" in df_filtrado.columns else {}
     pedidos_por_estado_sistema = df_filtrado.groupby("ESTADO")["NUMPED"].count().to_dict() if "ESTADO" in df_filtrado.columns else {}
 
-    # Caso especial, so em DF: a subfrota "MT" representa entregas em Mato Grosso,
-    # entao esse valor sai da UF "DF" e aparece na UF real "MT" no mapa.
-    valor_mt_real = 0
-    pedidos_mt_real = 0
+    # Casos especiais definidos em SUBFROTA_UF_REAL: uma subfrota de um estado do
+    # sistema representa, na verdade, entregas em outra UF real (ex: subfrota
+    # "MT" de DF = Mato Grosso; subfrota "ES" de MG_ES = Espirito Santo). Esse
+    # valor sai da UF padrao do estado e vai para a UF real correspondente no mapa.
+    valores_extra_por_uf = {}
     if "SUBFROTA" in df_filtrado.columns and "ESTADO" in df_filtrado.columns:
-        df_subfrota_mt = df_filtrado[
-            (df_filtrado["ESTADO"] == "DF") & (df_filtrado["SUBFROTA"].astype(str).str.strip() == "MT")
-        ]
-        if not df_subfrota_mt.empty:
-            valor_mt_real = df_subfrota_mt["VLTOTAL"].sum()
-            pedidos_mt_real = df_subfrota_mt["NUMPED"].count()
-            valor_por_estado_sistema["DF"] = valor_por_estado_sistema.get("DF", 0) - valor_mt_real
-            pedidos_por_estado_sistema["DF"] = pedidos_por_estado_sistema.get("DF", 0) - pedidos_mt_real
+        for (estado_base, subfrota_val), uf_real in SUBFROTA_UF_REAL.items():
+            df_sub = df_filtrado[
+                (df_filtrado["ESTADO"] == estado_base) & (df_filtrado["SUBFROTA"].astype(str).str.strip() == subfrota_val)
+            ]
+            if df_sub.empty:
+                continue
+            v = df_sub["VLTOTAL"].sum()
+            p = df_sub["NUMPED"].count()
+            valor_por_estado_sistema[estado_base] = valor_por_estado_sistema.get(estado_base, 0) - v
+            pedidos_por_estado_sistema[estado_base] = pedidos_por_estado_sistema.get(estado_base, 0) - p
+            acumulado = valores_extra_por_uf.setdefault(uf_real, [0, 0])
+            acumulado[0] += v
+            acumulado[1] += p
 
     # UFs do mapa cujo estado do sistema esta atualmente selecionado no filtro
     ufs_selecionadas = [
@@ -2265,9 +2272,10 @@ def renderizar_mapa_interativo(chave, mostrar_titulo=True, altura=480):
         valor = sum(valor_por_estado_sistema.get(s, 0) for s in siglas_sistema)
         pedidos = sum(pedidos_por_estado_sistema.get(s, 0) for s in siglas_sistema)
         tem_dados = siglas_sistema != []
-        if sigla_uf == "MT" and valor_mt_real:
-            valor += valor_mt_real
-            pedidos += pedidos_mt_real
+        valor_extra, pedidos_extra = valores_extra_por_uf.get(sigla_uf, [0, 0])
+        if valor_extra or pedidos_extra:
+            valor += valor_extra
+            pedidos += pedidos_extra
             tem_dados = True
         linhas_mapa.append({
             "UF": sigla_uf, "Valor": valor, "Pedidos": pedidos,
