@@ -135,7 +135,7 @@ h1, h2, h3, h4, h5, h6, p, label, li, a { color: var(--text-main) !important; fo
 .topo-header {
     display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 14px;
     padding: 18px 24px; margin-bottom: 22px; border-radius: var(--radius-lg);
-    background: var(--bg-card-soft); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    background: var(--bg-card-soft); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
     border: 1px solid var(--border-soft); box-shadow: var(--shadow-card);
     animation: fadeInUp .5s ease;
 }
@@ -147,7 +147,7 @@ h1, h2, h3, h4, h5, h6, p, label, li, a { color: var(--text-main) !important; fo
 
 /* ---------- BLOCOS / CARDS GLASS GERAIS ---------- */
 .glass-box {
-    background: var(--bg-card-soft); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    background: var(--bg-card-soft); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
     border: 1px solid var(--border-soft); border-radius: var(--radius-lg);
     box-shadow: var(--shadow-card); padding: 18px 20px; margin-bottom: 18px;
     animation: fadeInUp .5s ease;
@@ -157,7 +157,7 @@ h1, h2, h3, h4, h5, h6, p, label, li, a { color: var(--text-main) !important; fo
 .filter-title { font-size: 12px !important; text-transform: uppercase; letter-spacing: 1.6px; color: var(--accent-soft) !important; margin-bottom: 10px; font-weight:700; display:flex; align-items:center; gap:6px; }
 
 .painel {
-    background: var(--bg-card-soft); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    background: var(--bg-card-soft); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
     border: 1px solid var(--border-soft); border-radius: var(--radius-md);
     box-shadow: var(--shadow-card); padding: 14px 16px; margin-bottom: 14px;
 }
@@ -215,7 +215,7 @@ div[data-testid="column"] .stButton button[kind="primary"]:hover { transform: tr
 .kpi-card-premium {
     position: relative; background: linear-gradient(155deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015));
     border: 1px solid var(--border-soft); border-radius: var(--radius-lg); padding: 20px 22px;
-    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
     box-shadow: var(--shadow-card); overflow:hidden; transition: transform .25s ease, box-shadow .25s ease;
     animation: fadeInUp .5s ease;
 }
@@ -236,7 +236,7 @@ div[data-testid="column"] .stButton button[kind="primary"]:hover { transform: tr
 .kpi-spark { margin-top: 10px; opacity: .9; }
 
 /* ---------- TABELA PREMIUM ---------- */
-.tabela-premium-wrap { border-radius: var(--radius-md); overflow:hidden; border: 1px solid var(--border-soft); background: var(--bg-card-soft); backdrop-filter: blur(10px); }
+.tabela-premium-wrap { border-radius: var(--radius-md); overflow:hidden; border: 1px solid var(--border-soft); background: var(--bg-card-soft); backdrop-filter: blur(5px); }
 .tabela-premium { width:100%; border-collapse: collapse; font-family:'Inter',sans-serif; font-size: 13px; }
 .tabela-premium thead th {
     background: #12151C; color: var(--accent-soft); text-transform: uppercase;
@@ -254,7 +254,7 @@ div[data-testid="column"] .stButton button[kind="primary"]:hover { transform: tr
 .rodape-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 16px; margin-top: 24px; }
 .rodape-card {
     background: var(--bg-card-soft); border: 1px solid var(--border-soft); border-radius: var(--radius-md);
-    padding: 16px 18px; backdrop-filter: blur(10px); display:flex; gap:12px; align-items:center;
+    padding: 16px 18px; backdrop-filter: blur(5px); display:flex; gap:12px; align-items:center;
     transition: transform .2s ease;
 }
 .rodape-card:hover { transform: translateY(-3px); }
