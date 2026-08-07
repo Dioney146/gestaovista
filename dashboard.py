@@ -72,10 +72,12 @@ html, body, .stApp {
 }
 [data-testid="stAppViewContainer"] { background: transparent !important; position: relative; z-index: 1; min-height: 100vh; }
 [data-testid="stMain"], [data-testid="stMainBlockContainer"], .main, .main > div { background-color: transparent !important; }
-/* Sem min-height fixo aqui: quem garante a tela cheia em paginas curtas e o html/body/.stApp
-   acima. Forcar tambem o block-container a 100vh empilhava sobras vazias no fim de abas com
-   pouco conteudo, dando a sensacao de rolagem sem fim. */
-.block-container { padding: 1rem 1.6rem 1.4rem 1.6rem !important; max-width: 100% !important; position: relative; z-index: 1; }
+/* min-height:100vh aqui de novo: sem isso, abas com pouco conteudo (ex: "Por
+   Estados" mostrando so 1-2 estados) deixavam uma sobra vazia enorme abaixo do
+   conteudo em telas grandes, sem preencher a tela. Com box-sizing:border-box
+   global (regra * no topo deste CSS), o padding fica DENTRO desse 100vh — nao
+   soma por cima — entao nao volta a "esticar" além de uma tela so. */
+.block-container { padding: 1rem 1.6rem 1.4rem 1.6rem !important; max-width: 100% !important; position: relative; z-index: 1; min-height: 100vh; }
 
 /* Particulas discretas */
 .particulas { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
