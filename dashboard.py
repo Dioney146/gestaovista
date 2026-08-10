@@ -1454,7 +1454,7 @@ estados_carregados = sorted(df["ESTADO"].unique().tolist()) if "ESTADO" in df.co
 st.markdown('<div class="glass-box">', unsafe_allow_html=True)
 st.markdown('<p class="filter-title">🔎 Filtros</p>', unsafe_allow_html=True)
 
-col_f0, col_f1, col_f2, col_f3, col_f4 = st.columns([1.2, 1.7, 1.3, 1, 1])
+col_f0, col_f1, col_f2, col_f3 = st.columns([1.2, 1.7, 1.3, 1])
 
 with col_f0:
     if is_admin:
@@ -1482,13 +1482,6 @@ with col_f3:
         posicao_sel = st.selectbox("📋 Posicao", posicoes_disp)
     else:
         posicao_sel = "Todas"
-
-with col_f4:
-    if "TIPOVENDA" in df.columns:
-        tipos_disp = ["Todos"] + sorted(df["TIPOVENDA"].astype(str).unique().tolist())
-        tipo_sel = st.selectbox("🏷️ Tipo Venda", tipos_disp)
-    else:
-        tipo_sel = "Todos"
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ==================================================
@@ -1504,8 +1497,6 @@ if datas_sel and "DATA_IMPORTACAO" in df_filtrado.columns:
     df_filtrado = df_filtrado[df_filtrado["DATA_IMPORTACAO"].astype(str).isin(datas_sel)]
 if posicao_sel != "Todas" and "POSICAO" in df_filtrado.columns:
     df_filtrado = df_filtrado[df_filtrado["POSICAO"].astype(str) == posicao_sel]
-if tipo_sel != "Todos" and "TIPOVENDA" in df_filtrado.columns:
-    df_filtrado = df_filtrado[df_filtrado["TIPOVENDA"].astype(str) == tipo_sel]
 
 # Mesmos filtros de Estado/Cidade/Data aplicados aos MONTADOS (quando importados)
 df_montados_filtrado = df_montados_bruto.copy()
@@ -2406,7 +2397,7 @@ def renderizar_pagina_estado(estado):
 
     st.markdown('<div class="glass-box">', unsafe_allow_html=True)
     st.markdown('<p class="filter-title">🔎 Filtros do estado</p>', unsafe_allow_html=True)
-    col_c1, col_c2, col_c3, col_c4 = st.columns([1.6, 1.2, 1, 1])
+    col_c1, col_c2, col_c3 = st.columns([1.6, 1.2, 1])
     with col_c1:
         cidades_disp_e = sorted(df_lib_estado["CIDADE"].astype(str).unique().tolist()) if "CIDADE" in df_lib_estado.columns else []
         cidades_sel_e = st.multiselect("🏙️ Cidade", options=cidades_disp_e, placeholder="Todas as cidades", key=f"cidade_{estado}")
@@ -2422,12 +2413,6 @@ def renderizar_pagina_estado(estado):
             posicao_sel_e = st.selectbox("📋 Posicao", posicoes_disp_e, key=f"posicao_{estado}")
         else:
             posicao_sel_e = "Todas"
-    with col_c4:
-        if "TIPOVENDA" in df_lib_estado.columns:
-            tipos_disp_e = ["Todos"] + sorted(df_lib_estado["TIPOVENDA"].astype(str).unique().tolist())
-            tipo_sel_e = st.selectbox("🏷️ Tipo Venda", tipos_disp_e, key=f"tipovenda_{estado}")
-        else:
-            tipo_sel_e = "Todos"
     st.markdown('</div>', unsafe_allow_html=True)
 
     df_lib_f = df_lib_estado.copy()
@@ -2437,8 +2422,6 @@ def renderizar_pagina_estado(estado):
         df_lib_f = df_lib_f[df_lib_f["DATA_IMPORTACAO"].astype(str).isin(datas_sel_e)]
     if posicao_sel_e != "Todas" and "POSICAO" in df_lib_f.columns:
         df_lib_f = df_lib_f[df_lib_f["POSICAO"].astype(str) == posicao_sel_e]
-    if tipo_sel_e != "Todos" and "TIPOVENDA" in df_lib_f.columns:
-        df_lib_f = df_lib_f[df_lib_f["TIPOVENDA"].astype(str) == tipo_sel_e]
 
     df_mont_f = df_mont_estado.copy()
     if not df_mont_f.empty and cidades_sel_e and "CIDADE" in df_mont_f.columns:
