@@ -522,6 +522,35 @@ COLUNAS_LIBERADOS_CONHECIDAS = [
     "DATA", "DTENTREGA", "NUMCARREGAMENTO",
 ]
 
+# Lista oficial dos 78 municipios do Espirito Santo (IBGE), em maiusculo e sem
+# acento — usada apenas para o LIBERADOS_ES de MG_ES (ver
+# filtrar_liberados_es_por_cidade), ja que esse arquivo vem com as mesmas
+# filiais do LIBERADOS_MG e so a cidade de entrega permite separar de verdade
+# o que e ES do que e MG.
+MUNICIPIOS_ES = {
+    "AFONSO CLAUDIO", "AGUA DOCE DO NORTE", "AGUIA BRANCA", "ALEGRE", "ALFREDO CHAVES",
+    "ALTO RIO NOVO", "ANCHIETA", "APIACA", "ARACRUZ", "ATILIO VIVACQUA", "BAIXO GUANDU",
+    "BARRA DE SAO FRANCISCO", "BOA ESPERANCA", "BOM JESUS DO NORTE", "BREJETUBA",
+    "CACHOEIRO DE ITAPEMIRIM", "CARIACICA", "CASTELO", "COLATINA", "CONCEICAO DA BARRA",
+    "CONCEICAO DO CASTELO", "DIVINO DE SAO LOURENCO", "DOMINGOS MARTINS", "DORES DO RIO PRETO",
+    "ECOPORANGA", "FUNDAO", "GUACUI", "GUARAPARI", "IBATIBA", "IBIRACU", "IBITIRAMA", "ICONHA",
+    "IRUPI", "ITAGUACU", "ITAPEMIRIM", "ITARANA", "IUNA", "JAGUARE", "JERONIMO MONTEIRO",
+    "JOAO NEIVA", "LARANJA DA TERRA", "LINHARES", "MANTENOPOLIS", "MARATAIZES",
+    "MARECHAL FLORIANO", "MARILANDIA", "MIMOSO DO SUL", "MONTANHA", "MUCURICI",
+    "MUNIZ FREIRE", "MUQUI", "NOVA VENECIA", "PANCAS", "PEDRO CANARIO", "PINHEIROS",
+    "PIUMA", "PONTO BELO", "PRESIDENTE KENNEDY", "RIO BANANAL", "RIO NOVO DO SUL",
+    "SANTA LEOPOLDINA", "SANTA MARIA DE JETIBA", "SANTA TERESA", "SAO DOMINGOS DO NORTE",
+    "SAO GABRIEL DA PALHA", "SAO JOSE DO CALCADO", "SAO MATEUS", "SAO ROQUE DO CANAA",
+    "SERRA", "SOORETAMA", "VARGEM ALTA", "VENDA NOVA DO IMIGRANTE", "VIANA", "VILA PAVAO",
+    "VILA VALERIO", "VILA VELHA", "VITORIA", "GOVERNADOR LINDENBERG",
+}
+
+def normalizar_cidade(nome):
+    """Remove acentos e deixa maiusculo (mantendo espacos), para comparar nomes de
+    cidade com tolerancia a acentuacao — ex: 'Vitória' e 'VITORIA' batem."""
+    nome = unicodedata.normalize("NFKD", str(nome)).encode("ascii", "ignore").decode("ascii")
+    return nome.strip().upper()
+
 def normalizar_nome_coluna(nome):
     """Remove espacos, acentos e pontuacao e deixa maiusculo, para comparar nomes
     de coluna ignorando pequenas variacoes de formatacao (ex: 'Num Ped', 'num_ped'
@@ -579,6 +608,17 @@ def tratar_dataframe(df, subfrota=None):
 
     df = df.reset_index(drop=True)
     df["SUBFROTA"] = subfrota if subfrota else ""
+
+    # Caso especial: o LIBERADOS_ES de MG_ES vem com as MESMAS filiais do
+    # LIBERADOS_MG (as filiais atendem os dois estados juntas), entao o arquivo
+    # inteiro nao pode ser considerado "so ES". A unica forma confiavel de saber
+    # o estado de verdade e pela cidade de entrega — filtramos aqui para manter
+    # somente pedidos cuja CIDADE e um dos 78 municipios oficiais do Espirito
+    # Santo (MUNICIPIOS_ES), descartando os que na verdade sao de Minas Gerais.
+    if subfrota == "ES" and "CIDADE" in df.columns:
+        cidades_normalizadas = df["CIDADE"].apply(normalizar_cidade)
+        df = df[cidades_normalizadas.isin(MUNICIPIOS_ES)].reset_index(drop=True)
+
     return df
 
 # Mapeamento das colunas da planilha de MONTADOS (RoadNet) para os nomes padrao do sistema
@@ -732,14 +772,37 @@ def ordenar_datas_importacao_desc(lista_datas):
     )
 
 def ler_arquivo_upload(arquivo):
-    """Le um arquivo enviado pelo usuario (.xlsx, .xls ou .csv) para um DataFrame."""
+    """Le um arquivo enviado pelo usuario (.xlsx, .xls ou .csv) para um DataFrame.
+    Alguns relatorios sao exportados como '.xls' mas na verdade sao uma tabela HTML
+    ou um .xlsx disfarcado — o motor real do .xls antigo (xlrd) rejeita esses
+    arquivos com erros do tipo 'Workbook corruption: seen[2] == 4'. Para nao
+    quebrar a importacao nesses casos, tenta o formato declarado primeiro e, se
+    falhar, tenta os outros formatos comuns antes de desistir."""
     nome = arquivo.name.lower()
     if nome.endswith(".csv"):
         return pd.read_csv(arquivo)
-    elif nome.endswith(".xls"):
-        return pd.read_excel(arquivo, engine="xlrd")
-    else:
-        return pd.read_excel(arquivo, engine="openpyxl")
+
+    if nome.endswith(".xls"):
+        erros = []
+        for tentativa, ler in [
+            ("xls (xlrd)", lambda: pd.read_excel(arquivo, engine="xlrd")),
+            ("xlsx (openpyxl)", lambda: pd.read_excel(arquivo, engine="openpyxl")),
+            ("tabela HTML", lambda: max(pd.read_html(arquivo), key=len)),
+        ]:
+            try:
+                arquivo.seek(0)
+                return ler()
+            except Exception as e:
+                erros.append(f"{tentativa}: {e}")
+        arquivo.seek(0)
+        detalhes = " | ".join(erros)
+        raise ValueError(
+            f"Nao foi possivel ler '{arquivo.name}' em nenhum formato conhecido (.xls, .xlsx, tabela HTML). "
+            f"O arquivo pode estar corrompido ou num formato nao suportado. Detalhes: {detalhes}"
+        )
+
+    arquivo.seek(0)
+    return pd.read_excel(arquivo, engine="openpyxl")
 
 def detectar_estado_pelo_nome(nome_arquivo):
     """Tenta identificar a sigla do estado a partir do nome do arquivo enviado."""
@@ -778,6 +841,69 @@ def detectar_subfrota_pelo_nome(nome_arquivo, estado, mapa_subfrotas=None):
         if re.search(rf'(?<![A-Z0-9]){re.escape(subfrota)}(?![A-Z0-9])', nome):
             return subfrota
     return None
+
+# Lista oficial dos 78 municipios do Espirito Santo, em maiusculo e sem acento
+# (usada para reclassificar pedidos de MG_ES pela CIDADE, alem da PRACA — ver
+# redefinir_subfrota_mg_es_pela_praca). Nomes duplos sao normalizados do mesmo
+# jeito que normalizar_texto_basico faz com a coluna CIDADE do pedido.
+MUNICIPIOS_ES = {
+    "AFONSO CLAUDIO", "AGUA DOCE DO NORTE", "AGUIA BRANCA", "ALEGRE",
+    "ALFREDO CHAVES", "ALTO RIO NOVO", "ANCHIETA", "APIACA", "ARACRUZ",
+    "ATILIO VIVACQUA", "BAIXO GUANDU", "BARRA DE SAO FRANCISCO",
+    "BOA ESPERANCA", "BOM JESUS DO NORTE", "BREJETUBA",
+    "CACHOEIRO DE ITAPEMIRIM", "CARIACICA", "CASTELO", "COLATINA",
+    "CONCEICAO DA BARRA", "DIVINO DE SAO LOURENCO", "DOMINGOS MARTINS",
+    "DORES DO RIO PRETO", "ECOPORANGA", "FUNDAO", "GOVERNADOR LINDENBERG",
+    "GUACUI", "GUARAPARI", "IBATIBA", "IBIRACU", "ICONHA", "IRUPI",
+    "ITAGUACU", "ITAPEMIRIM", "ITARANA", "IUNA", "JAGUARE",
+    "JERONIMO MONTEIRO", "JOAO NEIVA", "LARANJA DA TERRA", "LINHARES",
+    "MANTENOPOLIS", "MARATAIZES", "MARECHAL FLORIANO", "MARILANDIA",
+    "MIMOSO DO SUL", "MONTANHA", "MUCURICI", "MUNIZ FREIRE", "MUQUI",
+    "NOVA VENECIA", "PANCAS", "PEDRO CANARIO", "PINHEIROS", "PIUMA",
+    "PONTO BELO", "PRESIDENTE KENNEDY", "RIO BANANAL", "RIO NOVO DO SUL",
+    "SANTA LEOPOLDINA", "SANTA MARIA DE JETIBA", "SANTA TERESA",
+    "SAO DOMINGOS DO NORTE", "SAO GABRIEL DA PALHA", "SAO JOSE DO CALCADO",
+    "SAO MATEUS", "SAO ROQUE DO CANAA", "SERRA", "SOORETAMA", "VARGEM ALTA",
+    "VENDA NOVA DO IMIGRANTE", "VIANA", "VILA PAVAO", "VILA VALERIO",
+    "VILA VELHA", "VITORIA",
+}
+
+def normalizar_texto_basico(texto):
+    """Remove acentos e deixa maiusculo, preservando espacos (diferente de
+    normalizar_nome_coluna, que tambem remove espacos) — usado para comparar
+    nomes de cidade sem depender de acentuacao (ex: 'São Mateus' == 'SAO MATEUS')."""
+    texto = unicodedata.normalize("NFKD", str(texto)).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", texto.upper()).strip()
+
+def redefinir_subfrota_mg_es_pela_praca(df):
+    """Os arquivos LIBERADOS_MG.xls e LIBERADOS_ES.xls, na pratica, vem com as
+    MESMAS filiais misturadas (o nome do arquivo nao reflete de qual estado e
+    cada pedido de verdade) — entao a subfrota pelo nome do arquivo nao e
+    confiavel para MG_ES. Reclassificamos linha a linha usando DUAS fontes,
+    para nao perder nenhum pedido de ES cuja PRACA nao esteja marcada como ES:
+    1) a coluna PRACA, que normalmente vem prefixada com o estado real (ex:
+       'ES-VILA VELHA', 'MG-ABAETE', 'MG BH-...');
+    2) a coluna CIDADE comparada contra a lista oficial dos municipios do ES
+       (MUNICIPIOS_ES) — cobre pedidos de ES cuja praca nao comeca com 'ES'.
+    Se qualquer uma das duas indicar ES, o pedido vira subfrota ES; senao, MG.
+    Isso substitui a subfrota vinda do nome do arquivo, so para Liberados de MG_ES."""
+    df = df.copy()
+    tem_praca = "PRACA" in df.columns
+    tem_cidade = "CIDADE" in df.columns
+    if not tem_praca and not tem_cidade:
+        return df
+
+    praca_es = (
+        df["PRACA"].fillna("").astype(str).str.strip().str.upper().str.startswith("ES")
+        if tem_praca else False
+    )
+    cidade_es = (
+        df["CIDADE"].fillna("").apply(normalizar_texto_basico).isin(MUNICIPIOS_ES)
+        if tem_cidade else False
+    )
+    eh_es = praca_es | cidade_es
+    df["SUBFROTA"] = eh_es.map({True: "ES", False: "MG"})
+    return df
 
 def detectar_tipo_pelo_nome(nome_arquivo, estado=None):
     """Identifica se o arquivo enviado e de pedidos LIBERADOS, MONTADOS ou CARGAS."""
@@ -1207,6 +1333,11 @@ def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual, data_importac
                 # nao afetar SP); nos demais estados fica em branco.
                 subfrota = detectar_subfrota_pelo_nome(arquivo.name, estado, SUBFROTAS_LIBERADOS_POR_ESTADO)
                 df_arquivo = tratar_dataframe(df_bruto, subfrota=subfrota)
+                if estado == "MG_ES":
+                    # LIBERADOS_MG.xls e LIBERADOS_ES.xls vem com as mesmas
+                    # filiais misturadas — a subfrota real de cada pedido e
+                    # decidida pela coluna PRACA, nao pelo nome do arquivo.
+                    df_arquivo = redefinir_subfrota_mg_es_pela_praca(df_arquivo)
             df_arquivo["ESTADO"] = estado
             agrupados.setdefault((estado, tipo), []).append(df_arquivo)
         except Exception as e:
