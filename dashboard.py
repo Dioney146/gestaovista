@@ -1703,25 +1703,27 @@ def renderizar_por_estados():
     somente_sp = set(estado_df["Estado"].astype(str)) == {"SP"}
 
     # Quando os dados exibidos sao exclusivamente de um estado que distingue
-    # Liberados por subfrota (hoje so DF) e ha subfrota nos dados: nem o "Resumo
-    # por Estado" (so uma linha + Total Geral) nem o grafico "Valor por Estado"
-    # agregam nada — nesse caso mostramos so os pedidos separados por subfrota
-    # (com Total Geral) e o mapa.
+    # Liberados por subfrota (hoje DF e MG_ES): nem o "Resumo por Estado" (so
+    # uma linha + Total Geral) nem o grafico "Valor por Estado" agregam nada —
+    # nesse caso mostramos so os pedidos separados por subfrota (com Total
+    # Geral) e o mapa. Sempre lista TODAS as subfrotas configuradas para o
+    # estado (ex: ES e MG), mesmo que uma delas esteja zerada nos dados
+    # filtrados no momento — nao depende de ja ter 2+ subfrotas presentes.
     estados_exibidos = set(estado_df["Estado"].astype(str))
     tabela_subfrota_lib = None
     if len(estados_exibidos) == 1:
         (unico_estado,) = estados_exibidos
         if unico_estado in SUBFROTAS_LIBERADOS_POR_ESTADO and "SUBFROTA" in df_filtrado.columns:
-            subfrotas_lib_presentes = sorted(
-                s for s in df_filtrado["SUBFROTA"].astype(str).str.strip().unique() if s
+            subfrotas_configuradas = SUBFROTAS_LIBERADOS_POR_ESTADO[unico_estado]
+            resumo_subfrota_lib = (
+                df_filtrado[df_filtrado["SUBFROTA"].astype(str).str.strip() != ""]
+                .groupby("SUBFROTA").agg(Pedidos=("NUMPED", "count"), Valor=("VLTOTAL", "sum"), Peso=("PESOBRUTOTOT", "sum"))
             )
-            if len(subfrotas_lib_presentes) >= 2:
-                resumo_subfrota_lib = (
-                    df_filtrado[df_filtrado["SUBFROTA"].astype(str).str.strip() != ""]
-                    .groupby("SUBFROTA").agg(Pedidos=("NUMPED", "count"), Valor=("VLTOTAL", "sum"), Peso=("PESOBRUTOTOT", "sum"))
-                    .reset_index().rename(columns={"SUBFROTA": "Subfrota"}).sort_values("Valor", ascending=False)
-                )
-                tabela_subfrota_lib = (montar_tabela_com_total(resumo_subfrota_lib, "Subfrota", max_height=340), subfrotas_lib_presentes)
+            resumo_subfrota_lib = (
+                resumo_subfrota_lib.reindex(subfrotas_configuradas, fill_value=0)
+                .reset_index().rename(columns={"SUBFROTA": "Subfrota"})
+            )
+            tabela_subfrota_lib = (montar_tabela_com_total(resumo_subfrota_lib, "Subfrota", max_height=340), subfrotas_configuradas)
 
     if somente_sp or tabela_subfrota_lib is not None:
         col_tabela, col_mapa = st.columns([1.1, 0.9])
