@@ -310,12 +310,15 @@ MAPA_UF_PARA_ESTADO = {
 
 # Estados em que o arquivo de CARGAS vem separado por subfrota — um arquivo por
 # subfrota, identificado pelo nome (ex: SP_3P.xlsx/SP_MALHA.xlsx,
-# DF_DF.xlsx/DF_MT.xlsx, ES.xlsx/MG.xlsx). Os demais estados continuam com um
-# unico arquivo.
+# DF_DF.xlsx/DF_MT.xlsx, BA_BA.xlsx/BA_SF.xlsx, MG_MG.xlsx/MG_ES.xlsx/MG_NF.xlsx).
+# Os demais estados continuam com um unico arquivo. O token generico (mesmo nome
+# do estado, ex: "DF", "BA", "MG") sempre fica por ultimo na lista, para so ser
+# usado como padrao quando nenhum token mais especifico bater.
 SUBFROTAS_POR_ESTADO = {
     "SP": ["3P", "MALHA"],
     "DF": ["MT", "DF"],
-    "MG_ES": ["ES", "MG"],
+    "BA": ["SF", "BA"],
+    "MG_ES": ["ES", "NF", "MG"],
 }
 
 # Estados em que os pedidos LIBERADOS tambem vem separados por subfrota — DF
@@ -328,14 +331,18 @@ SUBFROTAS_LIBERADOS_POR_ESTADO = {
     "MG_ES": ["ES", "MG"],
 }
 
-# Estados em que os pedidos MONTADOS tambem vem separados por subfrota — hoje so
-# MG_ES, que passou a receber tres arquivos (MONTADOS_MG.xlsx,
-# MONTADOS_MG.N.xlsx, MONTADOS_ES.xlsx) no lugar do unico arquivo combinado
-# anterior (MONTADOS_MG.ES.xlsx). "MG.N" e checado antes de "MG" para nao ser
-# confundido com o token mais generico. No final, os tres sao somados num unico
-# total de Montados do estado, do mesmo jeito que ja acontecia antes.
+# Estados em que os pedidos MONTADOS tambem vem separados por subfrota — MG_ES
+# (MONTADOS_MG.xlsx/MONTADOS_MG.N.xlsx/MONTADOS_ES.xlsx), BA
+# (MONTADOS_BA.xlsx/MONTADOS_BA (SF).xlsx) e DF (MONTADOS_DF.xlsx/
+# MONTADOS_MT.xlsx). O token mais especifico vem antes do generico na lista
+# (ex: "MG.N" antes de "MG", "SF" antes de "BA", "MT" antes de "DF") para nao
+# ser confundido com o nome do proprio estado. No final, todos os arquivos de
+# um mesmo estado sao somados num unico total de Montados, do mesmo jeito que
+# acontecia com um arquivo unico antes.
 SUBFROTAS_MONTADOS_POR_ESTADO = {
     "MG_ES": ["MG.N", "ES", "MG"],
+    "BA": ["SF", "BA"],
+    "DF": ["MT", "DF"],
 }
 
 # Pares (estado do sistema, subfrota) cujo valor deve ser exibido no mapa numa
@@ -1400,8 +1407,12 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
         subfrotas_estado_individual = SUBFROTAS_POR_ESTADO.get(estado_individual)
         subfrotas_liberados_estado_individual = SUBFROTAS_LIBERADOS_POR_ESTADO.get(estado_individual)
         subfrotas_montados_estado_individual = SUBFROTAS_MONTADOS_POR_ESTADO.get(estado_individual)
+        # Para estados com codigo composto (ex: MG_ES), o prefixo usado nos
+        # NOMES DE ARQUIVO de Cargas e so a primeira parte (ex: "MG_MG.xlsx",
+        # nao "MG_ES_MG.xlsx") — os demais estados (codigo simples) nao mudam.
+        prefixo_arquivo_estado = estado_individual.split("_")[0]
         rotulo_uploader = (
-            f"Liberados, Montados e Cargas ({' e '.join(f'{estado_individual}_{s}' for s in subfrotas_estado_individual)}) - {estado_individual}"
+            f"Liberados, Montados e Cargas ({' e '.join(f'{prefixo_arquivo_estado}_{s}' for s in subfrotas_estado_individual)}) - {estado_individual}"
             if subfrotas_estado_individual
             else f"Liberados, Montados e Cargas - {estado_individual}"
         )
@@ -1410,14 +1421,14 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
             accept_multiple_files=True, key=f"up_individual_{estado_individual}"
         )
         if subfrotas_estado_individual:
-            nomes_exemplo = " e ".join(f"**{estado_individual}_{s}**" for s in subfrotas_estado_individual)
+            nomes_exemplo = " e ".join(f"**{prefixo_arquivo_estado}_{s}**" for s in subfrotas_estado_individual)
             st.caption(f"Para Cargas de {estado_individual}, envie os arquivos separados por subfrota: {nomes_exemplo}.")
         if subfrotas_liberados_estado_individual:
             nomes_exemplo_lib = " e ".join(f"**LIBERADOS_{s}**" for s in subfrotas_liberados_estado_individual)
             st.caption(f"Para Liberados de {estado_individual}, envie os arquivos separados por subfrota: {nomes_exemplo_lib}.")
         if subfrotas_montados_estado_individual:
             nomes_exemplo_mont = ", ".join(f"**MONTADOS_{s}**" for s in subfrotas_montados_estado_individual)
-            st.caption(f"Para Montados de {estado_individual}, envie os arquivos separados por subfrota: {nomes_exemplo_mont}. No final, os valores sao somados num total unico.")
+            st.caption(f"Para Montados de {estado_individual}, envie os arquivos separados por subfrota: {nomes_exemplo_mont}. No final, os valores sao somados num total unico. O nome pode ter qualquer coisa em volta, contanto que contenha esse token (ex: 'MONTADOS_BA (SF).xlsx' tambem funciona).")
 
         if st.button(f"Processar dados de {estado_individual}", type="primary", use_container_width=True):
             if not arquivos_individual:
@@ -1442,8 +1453,11 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
         arquivos = st.file_uploader(
             "Arraste os arquivos de LIBERADOS, MONTADOS e CARGAS de todos os estados aqui — estado e tipo sao identificados automaticamente "
             "(para Cargas de SP, envie SP_3P e SP_MALHA separadamente; para Cargas de DF, envie DF_DF e DF_MT; "
-            "para Liberados de DF, envie LIBERADOS_DF e LIBERADOS_MT; "
-            "para MG_ES, envie LIBERADOS_MG e LIBERADOS_ES, e MONTADOS_MG, MONTADOS_MG.N e MONTADOS_ES separadamente)",
+            "para Cargas de BA, envie BA_BA e BA_SF; para Cargas de MG_ES, envie MG_MG, MG_ES e MG_NF; "
+            "para Liberados de DF, envie LIBERADOS_DF e LIBERADOS_MT; para Liberados de MG_ES, envie LIBERADOS_MG e LIBERADOS_ES; "
+            "para Montados de MG_ES, envie MONTADOS_MG, MONTADOS_MG.N e MONTADOS_ES; "
+            "para Montados de BA, envie MONTADOS_BA e MONTADOS_BA (SF); "
+            "para Montados de DF, envie MONTADOS_DF e MONTADOS_MT)",
             type=["xlsx", "xls", "csv"],
             accept_multiple_files=True,
             key="up_combinado",
