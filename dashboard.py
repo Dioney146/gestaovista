@@ -416,6 +416,25 @@ def carregar_geral_da_planilha(tipo):
         df["DATA_IMPORTACAO"] = normalizar_data_importacao(df["DATA_IMPORTACAO"])
     return df
 
+def sanitizar_valores_para_planilha(valores):
+    """Ultima camada de protecao antes de mandar os dados pro Google Sheets: troca
+    qualquer float que sobrar como NaN/Infinito por string vazia. O gspread manda
+    os valores como JSON, e 'NaN'/'Infinity' nao sao validos em JSON — se algum
+    valor escapar da limpeza normal (fillna+astype(str) — por exemplo apos um
+    concat que junta colunas diferentes entre o historico e um arquivo novo com
+    muitas colunas, tipo os relatorios de Liberados que vem com dezenas de
+    colunas alem das conhecidas pelo sistema), a importacao inteira quebrava com
+    'Out of range float values are not JSON compliant: nan'. Isso garante que
+    QUALQUER formato de LIBERADOS (com qualquer conjunto de colunas) sempre
+    consiga ser salvo."""
+    def limpar(v):
+        if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
+            return ""
+        if v is None:
+            return ""
+        return v
+    return [[limpar(v) for v in linha] for linha in valores]
+
 def salvar_estado_na_planilha(estado, tipo, df, data_importacao=None):
     """Acrescenta os pedidos ao historico geral (aba LIBERADOS/MONTADOS/CARGAS),
     marcando a data de importacao (hoje, por padrao, ou a data escolhida na tela de
@@ -445,7 +464,7 @@ def salvar_estado_na_planilha(estado, tipo, df, data_importacao=None):
             df_export[col] = df_export[col].dt.strftime("%Y-%m-%d").fillna("")
     df_export = df_export.fillna("").astype(str)
 
-    valores = [df_export.columns.tolist()] + df_export.values.tolist()
+    valores = sanitizar_valores_para_planilha([df_export.columns.tolist()] + df_export.values.tolist())
     aba = obter_ou_criar_aba_geral(tipo)
     aba.clear()
     aba.resize(rows=max(len(valores) + 20, 200), cols=max(len(df_export.columns) + 2, 15))
@@ -472,7 +491,7 @@ def apagar_estado_na_planilha(estado, tipo=None):
         aba.clear()
         if df_export.empty:
             continue
-        valores = [df_export.columns.tolist()] + df_export.values.tolist()
+        valores = sanitizar_valores_para_planilha([df_export.columns.tolist()] + df_export.values.tolist())
         aba.resize(rows=max(len(valores) + 20, 200), cols=max(len(df_export.columns) + 2, 15))
         aba.update(values=valores)
 
