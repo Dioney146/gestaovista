@@ -529,6 +529,16 @@ COLUNAS_LIBERADOS_CONHECIDAS = [
     "DATA", "DTENTREGA", "NUMCARREGAMENTO",
 ]
 
+# Apelidos manuais: alguns relatorios usam um nome de coluna totalmente diferente
+# para o mesmo dado (o casamento automatico por nome, em
+# renomear_colunas_liberados, so ignora acentos/espacos/maiusculas — nao pega
+# quando a coluna tem uma palavra a mais, como aqui). Comparado ja normalizado
+# (sem acento, maiusculo), entao "Posicao_Pedido", "posicao pedido" etc tambem
+# batem.
+APELIDOS_COLUNAS_LIBERADOS = {
+    "POSICAOPEDIDO": "POSICAO",  # ex: POSICAO_PEDIDO -> POSICAO
+}
+
 # Lista oficial dos 78 municipios do Espirito Santo (IBGE), em maiusculo e sem
 # acento — usada apenas para o LIBERADOS_ES de MG_ES (ver
 # filtrar_liberados_es_por_cidade), ja que esse arquivo vem com as mesmas
@@ -569,8 +579,19 @@ def renomear_colunas_liberados(df):
     """Reconhece as colunas de LIBERADOS pelo nome (nao pela posicao), entao a
     planilha pode vir em qualquer ordem de colunas — so precisa ter, em algum
     lugar, uma coluna cujo nome corresponda (com tolerancia a maiusculas/
-    minusculas e espacos) a cada nome conhecido em COLUNAS_LIBERADOS_CONHECIDAS."""
+    minusculas e espacos) a cada nome conhecido em COLUNAS_LIBERADOS_CONHECIDAS.
+    Antes disso, aplica os apelidos manuais de APELIDOS_COLUNAS_LIBERADOS, para
+    nomes de coluna bem diferentes do canonico (ex: POSICAO_PEDIDO -> POSICAO)."""
     mapa_normalizado = {normalizar_nome_coluna(c): c for c in df.columns}
+
+    renomeio = {}
+    for chave_normalizada, nome_canonico in APELIDOS_COLUNAS_LIBERADOS.items():
+        if chave_normalizada in mapa_normalizado and mapa_normalizado[chave_normalizada] != nome_canonico:
+            renomeio[mapa_normalizado[chave_normalizada]] = nome_canonico
+    if renomeio:
+        df = df.rename(columns=renomeio)
+        mapa_normalizado = {normalizar_nome_coluna(c): c for c in df.columns}
+
     renomeio = {}
     for nome_canonico in COLUNAS_LIBERADOS_CONHECIDAS:
         chave = normalizar_nome_coluna(nome_canonico)
@@ -606,7 +627,13 @@ def tratar_dataframe(df, subfrota=None):
             df[col] = df[col].replace(0, "").astype(str)
 
     if "POSICAO" in df.columns:
-        posicao_valida = df["POSICAO"].astype(str).str.strip().str.upper().isin(["L", "M"])
+        # Alguns relatorios usam a sigla (L/M) e outros a palavra completa
+        # (LIBERADO/MONTADO) para o mesmo status — aceita as duas formas, senao
+        # arquivos nesse segundo formato ficariam com a importacao inteira
+        # zerada (nenhuma linha bateria so com "L"/"M").
+        posicao_valida = df["POSICAO"].astype(str).str.strip().str.upper().isin(
+            ["L", "M", "LIBERADO", "MONTADO"]
+        )
         df = df[posicao_valida]
 
     if "NUMPED" in df.columns:
@@ -778,16 +805,33 @@ def ordenar_datas_importacao_desc(lista_datas):
         reverse=True,
     )
 
+def _ler_texto_delimitado(arquivo):
+    """Le um arquivo como texto delimitado (csv, ponto-e-virgula, tab...),
+    detectando automaticamente o separador e tentando utf-8 e depois latin-1
+    (varios relatorios do RoadNet saem em ISO-8859/latin-1)."""
+    for encoding in ("utf-8", "latin-1"):
+        try:
+            arquivo.seek(0)
+            return pd.read_csv(arquivo, sep=None, engine="python", encoding=encoding)
+        except Exception:
+            continue
+    raise ValueError("nao foi possivel interpretar como texto delimitado (csv/;) em utf-8 nem latin-1")
+
 def ler_arquivo_upload(arquivo):
     """Le um arquivo enviado pelo usuario (.xlsx, .xls ou .csv) para um DataFrame.
-    Alguns relatorios sao exportados como '.xls' mas na verdade sao uma tabela HTML
-    ou um .xlsx disfarcado — o motor real do .xls antigo (xlrd) rejeita esses
-    arquivos com erros do tipo 'Workbook corruption: seen[2] == 4'. Para nao
-    quebrar a importacao nesses casos, tenta o formato declarado primeiro e, se
-    falhar, tenta os outros formatos comuns antes de desistir."""
+    Alguns relatorios sao exportados como '.xls' mas na verdade sao uma tabela HTML,
+    um .xlsx disfarcado, ou ate texto simples delimitado por ';' (comum em exports
+    do RoadNet) — o motor real do .xls antigo (xlrd) rejeita esses arquivos com
+    erros do tipo 'Workbook corruption: seen[2] == 4' ou 'Expected BOF record'.
+    Para nao quebrar a importacao nesses casos, tenta o formato declarado primeiro
+    e, se falhar, tenta os outros formatos comuns antes de desistir."""
     nome = arquivo.name.lower()
     if nome.endswith(".csv"):
-        return pd.read_csv(arquivo)
+        try:
+            return _ler_texto_delimitado(arquivo)
+        except Exception:
+            arquivo.seek(0)
+            return pd.read_csv(arquivo)
 
     if nome.endswith(".xls"):
         erros = []
@@ -795,6 +839,7 @@ def ler_arquivo_upload(arquivo):
             ("xls (xlrd)", lambda: pd.read_excel(arquivo, engine="xlrd")),
             ("xlsx (openpyxl)", lambda: pd.read_excel(arquivo, engine="openpyxl")),
             ("tabela HTML", lambda: max(pd.read_html(arquivo), key=len)),
+            ("texto delimitado (csv/;)", lambda: _ler_texto_delimitado(arquivo)),
         ]:
             try:
                 arquivo.seek(0)
@@ -804,7 +849,7 @@ def ler_arquivo_upload(arquivo):
         arquivo.seek(0)
         detalhes = " | ".join(erros)
         raise ValueError(
-            f"Nao foi possivel ler '{arquivo.name}' em nenhum formato conhecido (.xls, .xlsx, tabela HTML). "
+            f"Nao foi possivel ler '{arquivo.name}' em nenhum formato conhecido (.xls, .xlsx, tabela HTML, texto delimitado). "
             f"O arquivo pode estar corrompido ou num formato nao suportado. Detalhes: {detalhes}"
         )
 
