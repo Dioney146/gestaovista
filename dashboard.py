@@ -689,15 +689,11 @@ def tratar_dataframe(df, subfrota=None):
         if col in df.columns:
             df[col] = df[col].replace(0, "").astype(str)
 
-    if "POSICAO" in df.columns:
-        # Alguns relatorios usam a sigla (L/M) e outros a palavra completa
-        # (LIBERADO/MONTADO) para o mesmo status — aceita as duas formas, senao
-        # arquivos nesse segundo formato ficariam com a importacao inteira
-        # zerada (nenhuma linha bateria so com "L"/"M").
-        posicao_valida = df["POSICAO"].astype(str).str.strip().str.upper().isin(
-            ["L", "M", "LIBERADO", "MONTADO"]
-        )
-        df = df[posicao_valida]
+    # Antes, so pedidos com POSICAO "L"/"M" (ou "LIBERADO"/"MONTADO") entravam —
+    # qualquer outro status (ex: "B"/Bloqueado, "Faturado", "Cancelado" etc.)
+    # era descartado, o que fazia os totais do dashboard nao baterem com a
+    # planilha de origem. Agora TODAS as posicoes sao mantidas e contam nos
+    # quantitativos, sem filtrar por status nenhum.
 
     if "NUMPED" in df.columns:
         numped_valido = pd.to_numeric(df["NUMPED"], errors="coerce").notna()
