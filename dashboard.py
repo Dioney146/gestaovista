@@ -930,6 +930,13 @@ def detectar_estado_pelo_nome(nome_arquivo):
         return "MG_ES"
     if tem(r'D[\.\-_ ]?F(?![A-Z0-9])') or "DISTRITO FEDERAL" in nome:
         return "DF"
+    if tem(r'(?<![A-Z0-9])MT(?![A-Z0-9])') or "MATO GROSSO" in nome:
+        # "MT" so e usado no sistema como subfrota de DF (entregas em Mato
+        # Grosso atendidas pela filial de DF) — nao existe estado "MT" proprio
+        # configurado, entao um arquivo com "MT" no nome (ex: MONTADOS_MT.xlsx,
+        # LIBERADOS_MT.xls) e sempre de DF, facilitando a importacao sem
+        # precisar selecionar o estado manualmente no modo combinado.
+        return "DF"
     if tem(r'(?<![A-Z0-9])BA(?![A-Z0-9])') or "BAHIA" in nome:
         return "BA"
     if tem(r'(?<![A-Z0-9])AM(?![A-Z0-9])') or "AMAZONAS" in nome:
