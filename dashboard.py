@@ -526,6 +526,36 @@ def apagar_varios_estados_na_planilha(estados, tipo=None):
         aba.resize(rows=max(len(valores) + 20, 200), cols=max(len(df_export.columns) + 2, 15))
         aba.update(values=valores)  # UMA gravacao por tipo
 
+def apagar_datas_na_planilha(datas, tipo=None):
+    """Remove do historico geral todas as linhas com uma das datas de
+    IMPORTACAO informadas (dd/mm/aaaa), de qualquer estado — util para desfazer
+    uma importacao feita com o arquivo errado num dia especifico, sem precisar
+    apagar o estado inteiro. Mesmo esquema de UMA leitura+gravacao por tipo."""
+    datas = set(datas)
+    if not datas:
+        return
+    for t in ([tipo] if tipo else ["LIBERADOS", "MONTADOS", "CARGAS"]):
+        df_historico = carregar_geral_da_planilha(t)  # UMA leitura por tipo
+        if df_historico.empty or "DATA_IMPORTACAO" not in df_historico.columns:
+            continue
+        df_restante = df_historico[~df_historico["DATA_IMPORTACAO"].astype(str).isin(datas)]
+        if len(df_restante) == len(df_historico):
+            continue
+
+        df_export = df_restante.copy()
+        for col in ["DATA", "DTENTREGA"]:
+            if col in df_export.columns and pd.api.types.is_datetime64_any_dtype(df_export[col]):
+                df_export[col] = df_export[col].dt.strftime("%Y-%m-%d").fillna("")
+        df_export = df_export.fillna("").astype(str)
+
+        aba = obter_ou_criar_aba_geral(t)
+        aba.clear()
+        if df_export.empty:
+            continue
+        valores = sanitizar_valores_para_planilha([df_export.columns.tolist()] + df_export.values.tolist())
+        aba.resize(rows=max(len(valores) + 20, 200), cols=max(len(df_export.columns) + 2, 15))
+        aba.update(values=valores)  # UMA gravacao por tipo
+
 @st.cache_data(ttl=120, show_spinner="Carregando dados salvos da planilha...")
 def carregar_todos_os_dados_da_planilha():
     """Le as tres abas gerais e separa o resultado por estado, para alimentar
@@ -1643,29 +1673,70 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
     if is_admin:
         st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
         st.caption("Apagar dados salvos (acao definitiva — remove da planilha compartilhada tambem).")
-        estados_para_limpar = ["Todos os estados"] + sorted(st.session_state["dados_por_estado"].keys())
-        col_limp1, col_limp2 = st.columns([2, 1])
-        with col_limp1:
-            alvo_limpeza = st.selectbox("Apagar dados de:", estados_para_limpar, key="alvo_limpeza")
-        with col_limp2:
-            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            if st.button("Apagar", use_container_width=True):
-                if alvo_limpeza == "Todos os estados":
+
+        modo_limpeza = st.radio(
+            "Apagar por:", ["Estado", "Data de importacao"],
+            horizontal=True, key="modo_limpeza",
+        )
+
+        if modo_limpeza == "Estado":
+            estados_para_limpar = ["Todos os estados"] + sorted(st.session_state["dados_por_estado"].keys())
+            col_limp1, col_limp2 = st.columns([2, 1])
+            with col_limp1:
+                alvo_limpeza = st.selectbox("Apagar dados de:", estados_para_limpar, key="alvo_limpeza")
+            with col_limp2:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                if st.button("Apagar", use_container_width=True, key="btn_apagar_estado"):
+                    if alvo_limpeza == "Todos os estados":
+                        if planilha_configurada():
+                            # Uma leitura+gravacao por tipo (LIBERADOS/MONTADOS/
+                            # CARGAS), nao uma por estado — apagar estado por
+                            # estado, um de cada vez, tambem estourava a cota de
+                            # leitura da API do Google Sheets.
+                            apagar_varios_estados_na_planilha(list(st.session_state["dados_por_estado"].keys()))
+                        st.session_state["dados_por_estado"] = {}
+                    else:
+                        if planilha_configurada():
+                            apagar_estado_na_planilha(alvo_limpeza)
+                        st.session_state["dados_por_estado"].pop(alvo_limpeza, None)
                     if planilha_configurada():
-                        # Uma leitura+gravacao por tipo (LIBERADOS/MONTADOS/
-                        # CARGAS), nao uma por estado — apagar estado por
-                        # estado, um de cada vez, tambem estourava a cota de
-                        # leitura da API do Google Sheets.
-                        apagar_varios_estados_na_planilha(list(st.session_state["dados_por_estado"].keys()))
-                    st.session_state["dados_por_estado"] = {}
-                else:
-                    if planilha_configurada():
-                        apagar_estado_na_planilha(alvo_limpeza)
-                    st.session_state["dados_por_estado"].pop(alvo_limpeza, None)
-                if planilha_configurada():
-                    carregar_todos_os_dados_da_planilha.clear()
-                st.session_state.pop("erros_importacao", None)
-                st.rerun()
+                        carregar_todos_os_dados_da_planilha.clear()
+                    st.session_state.pop("erros_importacao", None)
+                    st.rerun()
+
+        else:
+            # Junta as datas de importacao de LIBERADOS/MONTADOS/CARGAS de
+            # todos os estados ja carregados na sessao, para listar como opcao.
+            datas_disponiveis = set()
+            for dados_est in st.session_state["dados_por_estado"].values():
+                for chave in ("liberados", "montados", "cargas"):
+                    df_tipo = dados_est.get(chave)
+                    if df_tipo is not None and not df_tipo.empty and "DATA_IMPORTACAO" in df_tipo.columns:
+                        datas_disponiveis |= set(df_tipo["DATA_IMPORTACAO"].astype(str).unique())
+            datas_disponiveis = ordenar_datas_importacao_desc(list(datas_disponiveis))
+
+            if not datas_disponiveis:
+                st.info("Nenhuma data de importacao encontrada nos dados carregados.")
+            else:
+                col_limp1, col_limp2 = st.columns([2, 1])
+                with col_limp1:
+                    datas_alvo = st.multiselect(
+                        "Apagar dados importados em:", datas_disponiveis, key="datas_limpeza",
+                        placeholder="Escolha uma ou mais datas",
+                    )
+                with col_limp2:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    if st.button("Apagar", use_container_width=True, key="btn_apagar_data"):
+                        if not datas_alvo:
+                            st.warning("Escolha ao menos uma data de importacao para apagar.")
+                        else:
+                            if planilha_configurada():
+                                apagar_datas_na_planilha(datas_alvo)
+                                carregar_todos_os_dados_da_planilha.clear()
+                                st.session_state["dados_por_estado"] = carregar_todos_os_dados_da_planilha()
+                            st.session_state.pop("erros_importacao", None)
+                            st.rerun()
+                st.caption("Remove os pedidos importados nas datas escolhidas, de todos os estados e tipos (Liberados/Montados/Cargas) — o restante do historico continua intacto.")
 
 if st.session_state.get("erros_importacao"):
     with st.expander(f"⚠️ {len(st.session_state['erros_importacao'])} erro(s) na importacao"):
