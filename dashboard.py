@@ -55,36 +55,20 @@ html, body, .stApp {
     font-family: 'Inter', sans-serif !important;
 }
 
-/* ---------- FUNDO EM CAMADAS ---------- */
-.stApp {
-    position: relative;
-}
-.stApp::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    background-image:
-        radial-gradient(circle at 15% 10%, rgba(59,130,246,0.08), transparent 45%),
-        radial-gradient(circle at 85% 85%, rgba(245,158,11,0.07), transparent 45%);
-    background-color: var(--bg-base);
+/* ---------- FUNDO ---------- */
+/* Fundo simples e estatico: so a cor solida, sem imagem, sem gradiente fixo
+   e sem particulas animadas — essas camadas extras (position:fixed + varias
+   animacoes continuas, somadas ao blur dos cards) estavam pesando e travando
+   a navegacao em maquinas mais fracas. */
+html, body, .stApp {
+    background-color: var(--bg-base) !important;
 }
 [data-testid="stAppViewContainer"] { background: transparent !important; position: relative; z-index: 1; }
 [data-testid="stMain"], [data-testid="stMainBlockContainer"], .main, .main > div { background-color: transparent !important; }
 /* Sem min-height forcado em nenhum nivel (html/body/.stApp/stAppViewContainer/
-   block-container): o fundo e position:fixed, entao ele ja cobre a tela toda
-   sozinho, em qualquer posicao de rolagem, sem precisar que o documento tenha
-   uma altura minima. Forcar altura minima so criava espaco vazio ROLAVEL extra
+   block-container): forcar altura minima so criava espaco vazio ROLAVEL extra
    depois do fim do conteudo (a pagina ficava mais alta que o conteudo real). */
 .block-container { padding: 1rem 1.6rem 1.4rem 1.6rem !important; max-width: 100% !important; position: relative; z-index: 1; }
-
-/* Particulas discretas */
-.particulas { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
-.particulas span {
-    position: absolute; width: 3px; height: 3px; border-radius: 50%;
-    background: rgba(245,158,11,0.35); animation: subir 14s linear infinite;
-}
-@keyframes subir { from { transform: translateY(100vh); opacity: 0; } 10% { opacity:.6; } to { transform: translateY(-10vh); opacity: 0; } }
 
 /* ---------- TIPOGRAFIA GERAL ---------- */
 h1, h2, h3, h4, h5, h6, p, label, li, a { color: var(--text-main) !important; font-family: 'Inter', sans-serif !important; }
@@ -280,10 +264,6 @@ hr { border-color: var(--border-soft) !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="particulas">' + "".join(
-    [f'<span style="left:{7+i*11}%; animation-delay:{i*1.3}s;"></span>' for i in range(9)]
-) + '</div>', unsafe_allow_html=True)
-
 # ==================================================
 # CONFIGURACAO DOS ESTADOS
 # ==================================================
@@ -435,28 +415,67 @@ def sanitizar_valores_para_planilha(valores):
         return v
     return [[limpar(v) for v in linha] for linha in valores]
 
+def projetar_colunas_liberados_para_planilha(df):
+    """So para LIBERADOS: antes de gravar no Google Sheets, restringe as colunas
+    ao conjunto fixo de COLUNAS_LIBERADOS_PARA_SALVAR, sempre nessa ordem — mesmo
+    que o arquivo importado tenha vindo com dezenas de colunas extras (a leitura/
+    importacao continua flexivel, aceitando qualquer layout). Isso mantem a
+    planilha compartilhada sempre com o mesmo esquema previsivel, nao importa o
+    formato de origem do arquivo, e evita que importacoes com layouts diferentes
+    (uma com 15 colunas, outra com 60) criem incompatibilidade ao serem somadas."""
+    df = df.copy()
+    for col in COLUNAS_LIBERADOS_PARA_SALVAR:
+        if col not in df.columns:
+            df[col] = ""
+    return df[COLUNAS_LIBERADOS_PARA_SALVAR]
+
 def salvar_estado_na_planilha(estado, tipo, df, data_importacao=None):
-    """Acrescenta os pedidos ao historico geral (aba LIBERADOS/MONTADOS/CARGAS),
-    marcando a data de importacao (hoje, por padrao, ou a data escolhida na tela de
-    importacao). Remove antes as linhas do MESMO estado com a MESMA data de
-    importacao, para nao duplicar caso o arquivo seja reenviado para aquela data."""
+    """Acrescenta os pedidos de UM estado ao historico geral (aba LIBERADOS/
+    MONTADOS/CARGAS). Mantida para compatibilidade — importacoes com varios
+    estados de uma vez devem usar salvar_varios_estados_na_planilha, que faz
+    UMA leitura+gravacao por tipo em vez de uma por estado (isso e o que evita
+    estourar a cota de leitura da API do Google Sheets)."""
+    salvar_varios_estados_na_planilha(tipo, {estado: df}, data_importacao=data_importacao)
+
+def salvar_varios_estados_na_planilha(tipo, dfs_por_estado, data_importacao=None):
+    """Acrescenta os pedidos de VARIOS estados de uma vez ao historico geral de
+    um tipo (LIBERADOS/MONTADOS/CARGAS), fazendo UMA UNICA leitura e UMA UNICA
+    gravacao na planilha, nao importa quantos estados estejam sendo atualizados
+    juntos. Antes, cada estado disparava sua propria leitura+gravacao completa
+    da aba inteira — numa importacao combinada com varios estados de uma vez,
+    isso facilmente estourava a cota de 'leituras por minuto' da API do Google
+    Sheets (erro 429: 'Quota exceeded for quota metric Read requests'). Remove
+    do historico as linhas dos MESMOS estados com a MESMA data de importacao
+    antes de gravar as novas, exatamente como salvar_estado_na_planilha fazia
+    para um estado so. Para LIBERADOS, a planilha so guarda o conjunto fixo de
+    colunas definido em COLUNAS_LIBERADOS_PARA_SALVAR."""
+    if not dfs_por_estado:
+        return
     data_alvo = data_importacao or time.strftime(FORMATO_DATA_IMPORTACAO)
 
-    df_novo = df.copy()
-    df_novo["DATA_IMPORTACAO"] = data_alvo
-    df_novo = deduplicar_colunas(df_novo)
+    partes_novas = []
+    for estado, df in dfs_por_estado.items():
+        df_novo = df.copy()
+        df_novo["DATA_IMPORTACAO"] = data_alvo
+        df_novo = deduplicar_colunas(df_novo)
+        if tipo == "LIBERADOS":
+            df_novo = projetar_colunas_liberados_para_planilha(df_novo)
+        partes_novas.append(df_novo)
 
-    df_historico = carregar_geral_da_planilha(tipo)
+    df_historico = carregar_geral_da_planilha(tipo)  # UMA leitura, nao uma por estado
+    estados_atualizados = set(dfs_por_estado.keys())
     if not df_historico.empty:
         df_historico = deduplicar_colunas(df_historico)
+        if tipo == "LIBERADOS":
+            df_historico = projetar_colunas_liberados_para_planilha(df_historico)
         mascara_manter = ~(
-            (df_historico["ESTADO"].astype(str) == estado) &
+            df_historico["ESTADO"].astype(str).isin(estados_atualizados) &
             (df_historico["DATA_IMPORTACAO"].astype(str) == data_alvo)
         )
         df_historico = df_historico[mascara_manter]
-        df_final = pd.concat([df_historico, df_novo], ignore_index=True)
+        df_final = pd.concat([df_historico] + partes_novas, ignore_index=True)
     else:
-        df_final = df_novo
+        df_final = pd.concat(partes_novas, ignore_index=True)
 
     df_export = df_final.copy()
     for col in ["DATA", "DTENTREGA"]:
@@ -468,16 +487,28 @@ def salvar_estado_na_planilha(estado, tipo, df, data_importacao=None):
     aba = obter_ou_criar_aba_geral(tipo)
     aba.clear()
     aba.resize(rows=max(len(valores) + 20, 200), cols=max(len(df_export.columns) + 2, 15))
-    aba.update(values=valores)
+    aba.update(values=valores)  # UMA gravacao, nao uma por estado
 
 def apagar_estado_na_planilha(estado, tipo=None):
     """Remove do historico geral todas as linhas do estado informado.
-    tipo=None apaga em LIBERADOS e MONTADOS."""
+    tipo=None apaga em LIBERADOS, MONTADOS e CARGAS."""
+    apagar_varios_estados_na_planilha([estado], tipo=tipo)
+
+def apagar_varios_estados_na_planilha(estados, tipo=None):
+    """Remove do historico geral todas as linhas de VARIOS estados de uma vez —
+    ainda UMA leitura+gravacao por tipo (nao por estado), pelo mesmo motivo de
+    salvar_varios_estados_na_planilha: apagar 'Todos os estados' um por um
+    disparava uma leitura completa da planilha para CADA estado, o que tambem
+    estourava a cota de leitura da API do Google Sheets quando havia varios
+    estados salvos."""
+    estados = set(estados)
+    if not estados:
+        return
     for t in ([tipo] if tipo else ["LIBERADOS", "MONTADOS", "CARGAS"]):
-        df_historico = carregar_geral_da_planilha(t)
+        df_historico = carregar_geral_da_planilha(t)  # UMA leitura por tipo
         if df_historico.empty:
             continue
-        df_restante = df_historico[df_historico["ESTADO"].astype(str) != estado]
+        df_restante = df_historico[~df_historico["ESTADO"].astype(str).isin(estados)]
         if len(df_restante) == len(df_historico):
             continue
 
@@ -493,7 +524,7 @@ def apagar_estado_na_planilha(estado, tipo=None):
             continue
         valores = sanitizar_valores_para_planilha([df_export.columns.tolist()] + df_export.values.tolist())
         aba.resize(rows=max(len(valores) + 20, 200), cols=max(len(df_export.columns) + 2, 15))
-        aba.update(values=valores)
+        aba.update(values=valores)  # UMA gravacao por tipo
 
 @st.cache_data(ttl=120, show_spinner="Carregando dados salvos da planilha...")
 def carregar_todos_os_dados_da_planilha():
@@ -543,9 +574,22 @@ def parse_numero_brl(valor):
 # posicao do arquivo, ignora colunas extras que nao estao nessa lista, e segue
 # normalmente mesmo que alguma coluna opcional esteja faltando.
 COLUNAS_LIBERADOS_CONHECIDAS = [
-    "NUMPED", "VLTOTAL", "PESOBRUTOTOT", "NOMECLIENTE", "POSICAO", "NOMERCA",
-    "NOMESUP", "CIDADE", "TIPOVENDA", "PRACA", "DESTINO", "PLACA",
-    "DATA", "DTENTREGA", "NUMCARREGAMENTO",
+    "NUMPED", "CODFILIAL", "CODCLI", "VLTOTAL", "PESOBRUTOTOT", "NOMECLIENTE",
+    "POSICAO", "NOMERCA", "NOMESUP", "CIDADE", "TIPOVENDA", "PRACA", "DESTINO",
+    "PLACA", "DATA", "HORA", "MINUTO", "DTENTREGA", "NUMCARREGAMENTO",
+]
+
+# So essas colunas (nessa ordem) sao gravadas na planilha compartilhada do
+# Google Sheets para LIBERADOS — a LEITURA/importacao continua aceitando
+# qualquer layout de arquivo (com quantas colunas extras vier), mas o que fica
+# guardado na planilha e sempre esse conjunto fixo e previsivel. Isso tambem
+# evita que arquivos com dezenas de colunas diferentes entre si (ex: uma
+# importacao com 15 colunas e outra com 60) criem incompatibilidade de
+# esquema ao serem somados no historico.
+COLUNAS_LIBERADOS_PARA_SALVAR = [
+    "NUMPED", "CODFILIAL", "CODCLI", "NOMECLIENTE", "POSICAO",
+    "DATA", "HORA", "MINUTO", "DTENTREGA", "PESOBRUTOTOT",
+    "CIDADE", "VLTOTAL", "PRACA", "ESTADO", "SUBFROTA", "DATA_IMPORTACAO",
 ]
 
 # Apelidos manuais: alguns relatorios usam um nome de coluna totalmente diferente
@@ -1416,18 +1460,27 @@ def processar_lote(arquivos, mapa_estado_manual, mapa_tipo_manual, data_importac
 
     data_alvo = data_importacao or time.strftime(FORMATO_DATA_IMPORTACAO)
 
+    # Atualiza a sessao normalmente, por estado.
     resumo_ok = []
+    dfs_para_salvar_por_tipo = {}  # tipo -> {estado: df_concat} — agrupado por TIPO
     for (estado, tipo), lista_dfs in agrupados.items():
         df_concat = pd.concat(lista_dfs, ignore_index=True)
         df_concat["DATA_IMPORTACAO"] = data_alvo
         chave = {"LIBERADOS": "liberados", "MONTADOS": "montados", "CARGAS": "cargas"}[tipo]
         st.session_state["dados_por_estado"].setdefault(estado, {})[chave] = df_concat
-        if planilha_configurada():
-            try:
-                salvar_estado_na_planilha(estado, tipo, df_concat, data_importacao=data_alvo)
-            except Exception as e:
-                erros.append(f"Nao foi possivel salvar {estado} ({tipo}) na planilha compartilhada: {e}")
+        dfs_para_salvar_por_tipo.setdefault(tipo, {})[estado] = df_concat
         resumo_ok.append(f"{estado} ({tipo.title()}): {len(df_concat)} registro(s)")
+
+    # Salva na planilha compartilhada UMA VEZ POR TIPO (nao uma vez por estado),
+    # mesmo que a importacao tenha varios estados de uma vez — isso evita
+    # estourar a cota de leitura da API do Google Sheets.
+    if planilha_configurada():
+        for tipo, dfs_por_estado in dfs_para_salvar_por_tipo.items():
+            try:
+                salvar_varios_estados_na_planilha(tipo, dfs_por_estado, data_importacao=data_alvo)
+            except Exception as e:
+                estados_str = ", ".join(dfs_por_estado.keys())
+                erros.append(f"Nao foi possivel salvar {estados_str} ({tipo}) na planilha compartilhada: {e}")
 
     if planilha_configurada() and resumo_ok:
         carregar_todos_os_dados_da_planilha.clear()
@@ -1595,9 +1648,12 @@ with st.expander("📥 Importar dados", expanded=(not dados_visiveis())):
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             if st.button("Apagar", use_container_width=True):
                 if alvo_limpeza == "Todos os estados":
-                    for est in list(st.session_state["dados_por_estado"].keys()):
-                        if planilha_configurada():
-                            apagar_estado_na_planilha(est)
+                    if planilha_configurada():
+                        # Uma leitura+gravacao por tipo (LIBERADOS/MONTADOS/
+                        # CARGAS), nao uma por estado — apagar estado por
+                        # estado, um de cada vez, tambem estourava a cota de
+                        # leitura da API do Google Sheets.
+                        apagar_varios_estados_na_planilha(list(st.session_state["dados_por_estado"].keys()))
                     st.session_state["dados_por_estado"] = {}
                 else:
                     if planilha_configurada():
