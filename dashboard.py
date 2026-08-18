@@ -394,6 +394,23 @@ def carregar_geral_da_planilha(tipo):
             df[col] = pd.to_datetime(df[col], errors="coerce")
     if "DATA_IMPORTACAO" in df.columns:
         df["DATA_IMPORTACAO"] = normalizar_data_importacao(df["DATA_IMPORTACAO"])
+
+    if "ESTADO" in df.columns:
+        # MT (Mato Grosso) e DF sao dois estados de verdade diferentes, mas as
+        # entregas de MT saem da MESMA filial de DF — por isso o sistema trata
+        # MT como uma SUBFROTA de DF (nao como estado proprio) em Cargas,
+        # Liberados e Montados, para que os quantitativos (inclusive "Ficaram
+        # para Tras") sempre juntem os dois. Dados salvos ANTES dessa regra
+        # podem ter ficado gravados com ESTADO="MT" literal — normaliza esses
+        # registros aqui, na leitura, para ESTADO="DF" (+ SUBFROTA="MT" quando
+        # ainda nao tiver subfrota marcada), sem precisar reimportar nada.
+        mascara_mt = df["ESTADO"].astype(str).str.strip().str.upper() == "MT"
+        if mascara_mt.any():
+            df.loc[mascara_mt, "ESTADO"] = "DF"
+            if "SUBFROTA" in df.columns:
+                sem_subfrota = df["SUBFROTA"].astype(str).str.strip() == ""
+                df.loc[mascara_mt & sem_subfrota, "SUBFROTA"] = "MT"
+
     return df
 
 def sanitizar_valores_para_planilha(valores):
