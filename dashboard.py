@@ -709,6 +709,24 @@ def renomear_colunas_liberados(df):
             renomeio[mapa_normalizado[chave]] = nome_canonico
     return df.rename(columns=renomeio)
 
+def remover_linha_resumo_total(df, colunas_chave):
+    """Remove uma linha de 'Total' (resumo/rodape do relatorio, com a soma de
+    tudo) se qualquer uma das colunas-chave comecar com a palavra 'TOTAL' — bem
+    comum em exportacoes que colocam essa linha extra no final do arquivo. Sem
+    isso, ela entraria como se fosse um pedido/rota de verdade, inflando os
+    quantitativos e "duplicando" os totais do dashboard em relacao ao arquivo
+    de origem."""
+    if df.empty:
+        return df
+    colunas_presentes = [c for c in colunas_chave if c in df.columns]
+    if not colunas_presentes:
+        return df
+    mascara_total = pd.Series(False, index=df.index)
+    for col in colunas_presentes:
+        valores = df[col].astype(str).str.strip().str.upper()
+        mascara_total |= valores.str.startswith("TOTAL")
+    return df[~mascara_total]
+
 def tratar_dataframe(df, subfrota=None):
     """Aplica a limpeza padrao (numeros, datas, textos) em um dataframe de uma aba.
     subfrota: usado apenas nos estados configurados em SUBFROTAS_POR_ESTADO (hoje
@@ -736,6 +754,11 @@ def tratar_dataframe(df, subfrota=None):
         if col in df.columns:
             df[col] = df[col].replace(0, "").astype(str)
 
+    # Remove a linha de "Total" que alguns relatorios colocam no final do
+    # arquivo (soma de tudo) — sem isso ela entrava como se fosse mais um
+    # pedido, duplicando/inflando os quantitativos.
+    df = remover_linha_resumo_total(df, ["NOMECLIENTE", "CIDADE"])
+
     # Antes, so pedidos com POSICAO "L"/"M" (ou "LIBERADO"/"MONTADO") entravam —
     # qualquer outro status (ex: "B"/Bloqueado, "Faturado", "Cancelado" etc.)
     # era descartado, o que fazia os totais do dashboard nao baterem com a
@@ -743,7 +766,11 @@ def tratar_dataframe(df, subfrota=None):
     # quantitativos, sem filtrar por status nenhum.
 
     if "NUMPED" in df.columns:
-        numped_valido = pd.to_numeric(df["NUMPED"], errors="coerce").notna()
+        numped_numerico = pd.to_numeric(df["NUMPED"], errors="coerce")
+        # != 0 tambem: uma linha de "Total" sem numero de pedido vira 0 depois
+        # do fillna(0) la em cima — sem essa checagem, ela passaria como se
+        # fosse um NUMPED valido (0 nao e nulo, so notna() nao pegava isso).
+        numped_valido = numped_numerico.notna() & (numped_numerico != 0)
         df = df[numped_valido]
 
     df = df.reset_index(drop=True)
@@ -800,9 +827,17 @@ def tratar_dataframe_montados(df, subfrota=None):
         if col in df.columns:
             df[col] = df[col].replace(0, "").astype(str).str.strip()
 
+    # Remove a linha de "Total" que alguns relatorios colocam no final do
+    # arquivo (soma de tudo) — sem isso ela entrava como se fosse mais um
+    # pedido montado, duplicando/inflando os quantitativos.
+    df = remover_linha_resumo_total(df, ["NOMECLIENTE", "CIDADE"])
+
     if "NUMPED" in df.columns:
         df["NUMPED"] = normalizar_numped(df["NUMPED"])
-        df = df[df["NUMPED"] != ""]
+        # "0" tambem: uma linha de "Total" sem numero de pedido vira 0 depois
+        # do fillna(0) la em cima, e normalizar_numped devolve a string "0" —
+        # sem essa checagem ela passaria como se fosse um NUMPED valido.
+        df = df[~df["NUMPED"].isin(["", "0"])]
         df = df.drop_duplicates(subset=["NUMPED"])
 
     df = df.reset_index(drop=True)
@@ -846,9 +881,12 @@ def tratar_dataframe_cargas(df, subfrota=None):
     df = deduplicar_colunas(df)
     df = df.fillna("")
 
-    # A ultima linha do relatorio costuma ser uma linha de TOTAL (sem descricao da rota) — descarta.
+    # A ultima linha do relatorio costuma ser uma linha de TOTAL — descarta
+    # tanto quando vem sem descricao da rota (celula vazia) quanto quando vem
+    # com o texto "Total" na propria celula (alguns formatos fazem assim).
     if "DESCRICAOROTA" in df.columns:
         df = df[df["DESCRICAOROTA"].astype(str).str.strip() != ""]
+        df = remover_linha_resumo_total(df, ["DESCRICAOROTA"])
 
     for col in ["NUMPARADAS", "NUMORDENS"]:
         if col in df.columns:
